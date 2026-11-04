@@ -1,0 +1,107 @@
+name: Build
+
+# Chaque push compile Windows, macOS et Linux (dépôt public : minutes gratuites).
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths-ignore: [ '**.md' ]
+  pull_request:
+  workflow_dispatch:
+
+# Un nouveau push annule la compilation en cours du précédent : pas de minutes gaspillées.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, macos-latest, ubuntu-24.04 ]
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+
+      - name: Réglages propres à la plateforme
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows)
+              echo "CMAKE_EXTRA=" >> "$GITHUB_ENV"
+              echo "PLUGINVAL_ARCHIVE=pluginval_Windows.zip" >> "$GITHUB_ENV"
+              echo "PLUGINVAL=pluginval/pluginval.exe" >> "$GITHUB_ENV" ;;
+            macOS)
+              # Binaire universel : Apple Silicon + Intel
+              echo "CMAKE_EXTRA=-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" >> "$GITHUB_ENV"
+              echo "PLUGINVAL_ARCHIVE=pluginval_macOS.zip" >> "$GITHUB_ENV"
+              echo "PLUGINVAL=pluginval/pluginval.app/Contents/MacOS/pluginval" >> "$GITHUB_ENV" ;;
+            Linux)
+              echo "CMAKE_EXTRA=-G Ninja" >> "$GITHUB_ENV"
+              echo "PLUGINVAL_ARCHIVE=pluginval_Linux.zip" >> "$GITHUB_ENV"
+              echo "PLUGINVAL=pluginval/pluginval" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Installer les dépendances Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xvfb \
+            libasound2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev \
+            libxrandr-dev libxrender-dev libxi-dev libegl-dev libglu1-mesa-dev mesa-common-dev
+
+      - name: Configurer
+        shell: bash
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release $CMAKE_EXTRA
+
+      - name: Compiler
+        run: cmake --build build --config Release --parallel
+
+      - name: Tests unitaires
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Valider le VST3 avec pluginval
+        shell: bash
+        run: |
+          curl -sSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/v1.0.4/$PLUGINVAL_ARCHIVE"
+          unzip -q pluginval.zip -d pluginval
+          chmod +x "$PLUGINVAL" || true
+
+          RUN=""
+          if [ "$RUNNER_OS" = "Linux" ]; then RUN="xvfb-run -a"; fi
+
+          $RUN "$PLUGINVAL" --strictness-level 10 --timeout-ms 300000 \
+            --validate "build/SubdAmp_artefacts/Release/VST3/SubdAmp.vst3"
+
+      - name: Préparer l'archive
+        shell: bash
+        run: |
+          ARTEFACTS="build/SubdAmp_artefacts/Release"
+          ARCHIVE="SubdAmp-$RUNNER_OS.zip"
+          mkdir -p dist
+          cp -R "$ARTEFACTS/VST3/SubdAmp.vst3" dist/
+
+          # On zippe nous-mêmes : upload-artifact ne conserve pas les droits d'exécution.
+          case "$RUNNER_OS" in
+            macOS)
+              cp -R "$ARTEFACTS/Standalone/SubdAmp.app" dist/
+              ditto -c -k --sequesterRsrc dist "$ARCHIVE" ;;
+            Windows)
+              cp "$ARTEFACTS/Standalone/SubdAmp.exe" dist/
+              7z a "$ARCHIVE" ./dist/* > /dev/null ;;
+            Linux)
+              cp "$ARTEFACTS/Standalone/SubdAmp" dist/
+              (cd dist && zip -qr "../$ARCHIVE" .) ;;
+          esac
+
+      - name: Publier les binaires
+        uses: actions/upload-artifact@v7
+        with:
+          name: SubdAmp-${{ runner.os }}
+          path: SubdAmp-${{ runner.os }}.zip
