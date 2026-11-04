@@ -14,6 +14,7 @@
 #include <catch2/generators/catch_generators.hpp>
 
 #include <cmath>
+#include <thread>
 #include <vector>
 
 using namespace subdamp::dsp;
@@ -51,13 +52,40 @@ namespace
     }
 }
 
+namespace
+{
+    // Le compilateur a le droit de supprimer un new/delete dont le résultat ne sert à rien
+    // (clang le fait) : on fait « fuir » le pointeur vers une variable volatile.
+    void* volatile allocationSink = nullptr;
+}
+
 TEST_CASE ("Le compteur d'allocations détecte bien une allocation", "[realtime]")
 {
     ScopedAllocationCounter counter;
-    auto* leakCheck = new std::vector<float> (1024);
-    delete leakCheck;
+    allocationSink = new std::vector<float> (1024);
+    delete static_cast<std::vector<float>*> (allocationSink);
 
     REQUIRE (counter.count() >= 2); // le vecteur et son tableau, au moins
+}
+
+TEST_CASE ("Le compteur ignore les allocations des autres threads", "[realtime]")
+{
+    ScopedAllocationCounter counter;
+
+    std::thread other ([]
+    {
+        for (int i = 0; i < 100; ++i)
+        {
+            allocationSink = new std::vector<float> (1024);
+            delete static_cast<std::vector<float>*> (allocationSink);
+        }
+    });
+
+    other.join();
+
+    // Comptées, ces allocations donneraient au moins 200. Créer le thread lui-même alloue
+    // un peu sur le thread courant (1 ou 2 selon la plateforme), d'où la marge.
+    REQUIRE (counter.count() < 10);
 }
 
 TEST_CASE ("Les modules LIVE n'allouent rien pendant le traitement", "[realtime]")

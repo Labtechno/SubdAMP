@@ -5,7 +5,7 @@
 
 namespace subdamp::test
 {
-std::atomic<bool> trackAllocations { false };
+thread_local bool trackAllocationsOnThisThread = false;
 std::atomic<int> allocationCount { 0 };
 }
 
@@ -13,7 +13,7 @@ namespace
 {
     void noteAllocation() noexcept
     {
-        if (subdamp::test::trackAllocations.load (std::memory_order_relaxed))
+        if (subdamp::test::trackAllocationsOnThisThread)
             subdamp::test::allocationCount.fetch_add (1, std::memory_order_relaxed);
     }
 }
