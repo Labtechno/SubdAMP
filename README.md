@@ -3,8 +3,40 @@
 Plugin guitare (VST3 + application standalone) orienté pitch : octaver, whammy,
 harmonizer, frequency shifter, shimmer, textures. Usage personnel.
 
-**État : étape 1 — squelette.** Le son traverse le plugin avec gain d'entrée, volume
-de sortie, bypass sans clic et vumètres. La chaîne de modules arrive aux étapes suivantes.
+**État : étape 2.** Chaîne `entrée → GATE → [avant l'ampli] → AMPLI → CAB → [après l'ampli] → sortie`.
+
+| Module | Rôle | Latence |
+|---|---|---|
+| GATE | Noise gate à hystérésis, ouverture instantanée, relâchement réglable | LIVE (0) |
+| SUB | Octaver analogique façon OC-2 : -1 et -2 octaves, +1 octave (fuzz), tonalité | LIVE (0) |
+| AMPLI | Capture Neural Amp Modeler (`.nam`) + gain, égaliseur 3 bandes, niveau | LIVE (0 à 48 kHz, < 1 ms sinon) |
+| CAB | Réponse impulsionnelle (`.wav`, `.aif`), ou cab interne par filtres | LIVE (0) |
+| FREQ SHIFT | Décaleur de fréquence (type Bode), mix, réinjection | LIVE (≈ 0) |
+
+SUB et FREQ SHIFT se placent avant ou après l'ampli (bouton sur leur carte), sans clic.
+
+## Captures d'amplis et IR
+
+- **Captures NAM** : des milliers de captures gratuites d'amplis et de pédales sur
+  [Tone3000](https://www.tone3000.com) (ex-ToneHunt). Bouton **Charger…** de la carte AMPLI.
+  Le volume est normalisé d'une capture à l'autre (comme le plugin NAM officiel).
+- **IR de cab** : n'importe quelle réponse impulsionnelle mono ou stéréo (seul le canal gauche
+  est utilisé). Sans IR, le cab interne simule un 4×12.
+- Les chemins sont enregistrés avec la session ou le preset. Si un fichier a été déplacé, la
+  carte l'indique (« Fichier introuvable ») : il suffit de le recharger.
+- Les captures sont entraînées à 48 kHz : c'est la fréquence conseillée. À une autre
+  fréquence (88,2 kHz...), SubdAmp rééchantillonne en interne (moins d'1 ms de latence,
+  déclarée au DAW).
+
+### Charge CPU
+
+Une capture WaveNet « standard » est le module le plus lourd. Mesure sur un cœur de
+processeur serveur à 2,1 GHz, blocs de 64 échantillons : environ 16 à 23 % d'un cœur
+(A2 : ~6 %, LSTM : < 1 %). Un processeur de bureau récent fait nettement mieux.
+Pour mesurer sur ta machine : `build/tests/SubdAmpBenchmark` (accepte tes propres `.nam`).
+
+Sur x86, le moteur NAM est compilé avec AVX2/FMA (≈ 30 % de CPU en moins). Pour un
+processeur antérieur à 2013 : `-DSUBDAMP_NAM_AVX2=OFF`.
 
 ## Récupérer les binaires (sans rien compiler)
 
@@ -33,7 +65,7 @@ Viser un buffer de 64 ou 128 échantillons à 48 kHz.
 ## Compiler soi-même
 
 Prérequis : CMake ≥ 3.22, Git, et Visual Studio 2022 (Windows) ou Xcode (macOS).
-JUCE et Catch2 sont téléchargés automatiquement.
+JUCE, NeuralAmpModelerCore, Eigen et Catch2 sont téléchargés automatiquement.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -48,12 +80,18 @@ Sur macOS, ajouter `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` pour un binaire un
 ## Structure
 
 ```
-dsp/          C++ pur, sans JUCE, testable unitairement (lissage, gain, bypass, mesure)
-plugin/       AudioProcessor, paramètres, état sauvegardé et sa migration
-gui/          interface du plugin
+dsp/          C++ pur, sans JUCE, testable unitairement : modules (gate, SUB, FREQ SHIFT,
+              ampli NAM, égaliseur), rééchantillonnage, échange temps réel des captures
+plugin/       AudioProcessor, paramètres, chaîne, cab (convolution JUCE), presets
+gui/          interface du plugin (cartes de modules, sélecteurs de fichiers)
 standalone/   application standalone : carte son, canal guitare, réglages
-tests/        tests unitaires (Catch2)
+third_party/  compilation de NeuralAmpModelerCore
+tests/        dsp/ (unitaires), realtime/ (aucune allocation dans l'audio),
+              integration/ (processeur complet, presets), benchmark/ (charge CPU)
 ```
+
+`SubdAmpRealtimeTests` et `SubdAmpProcessorTests` remplacent `malloc`/`new` pour compter
+les allocations : toute allocation dans le traitement audio fait échouer les tests.
 
 ## Règles du projet
 
@@ -75,5 +113,7 @@ tests/        tests unitaires (Catch2)
 | JUCE 9 | AGPLv3 ou licence commerciale JUCE | Aucune contrainte en usage perso. Pour distribuer un jour : code source publié sous AGPLv3, ou licence commerciale. |
 | VST3 SDK 3.8 (fourni avec JUCE) | MIT | Aucune contrainte. |
 | ASIO SDK (fourni avec JUCE, Windows) | Licence Steinberg ou GPLv3 | Aucune contrainte en usage perso. |
+| NeuralAmpModelerCore | MIT | Aucune contrainte. |
+| Eigen (utilisé par NAM) | MPL 2.0 | Aucune contrainte tant que ses fichiers ne sont pas modifiés. |
 | Catch2 (tests seulement) | BSL-1.0 | Aucune contrainte. |
 | pluginval (CI seulement, non lié) | GPLv3 | Outil de test, n'entre pas dans le plugin. |

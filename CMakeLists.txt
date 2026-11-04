@@ -21,6 +21,7 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(JUCE)
 
+add_subdirectory(third_party)
 add_subdirectory(dsp)
 
 #==============================================================================
@@ -46,11 +47,14 @@ juce_add_plugin(SubdAmp
 
 target_sources(SubdAmp
     PRIVATE
+        plugin/CabSection.cpp
         plugin/Parameters.cpp
         plugin/PluginProcessor.cpp
         plugin/StateVersioning.cpp
-        gui/PluginEditor.cpp
+        gui/FileSlot.cpp
         gui/LevelMeter.cpp
+        gui/ModuleCard.cpp
+        gui/PluginEditor.cpp
         standalone/AudioSettingsPanel.cpp
         standalone/StandaloneApp.cpp
         standalone/StandaloneHost.cpp)
@@ -75,6 +79,7 @@ target_link_libraries(SubdAmp
     PRIVATE
         subdamp_dsp
         juce::juce_audio_utils
+        juce::juce_dsp
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
