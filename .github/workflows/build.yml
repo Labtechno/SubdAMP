@@ -1,6 +1,7 @@
 name: Build
 
-# Chaque push compile Windows, macOS et Linux (dépôt public : minutes gratuites).
+# Chaque push compile Windows et macOS (dépôt public : minutes gratuites).
+# Pas de version Linux : inutile pour l'usage prévu (le développement local, lui, reste testé sous Linux).
 on:
   push:
     branches: [ main ]
@@ -22,10 +23,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ windows-latest, macos-latest, ubuntu-24.04 ]
+        os: [ windows-latest, macos-latest ]
 
     env:
-      # Cache de compilation (macOS et Linux) : seuls les fichiers modifiés sont recompilés
+      # Cache de compilation (macOS) : seuls les fichiers modifiés sont recompilés
       # d'un push à l'autre. La compilation universelle macOS passe de ~50 à quelques minutes.
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
@@ -56,20 +57,7 @@ jobs:
               echo "CMAKE_EXTRA=-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64;x86_64 -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
               echo "PLUGINVAL_ARCHIVE=pluginval_macOS.zip" >> "$GITHUB_ENV"
               echo "PLUGINVAL=pluginval/pluginval.app/Contents/MacOS/pluginval" >> "$GITHUB_ENV" ;;
-            Linux)
-              echo "CMAKE_EXTRA=-G Ninja -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
-              echo "PLUGINVAL_ARCHIVE=pluginval_Linux.zip" >> "$GITHUB_ENV"
-              echo "PLUGINVAL=pluginval/pluginval" >> "$GITHUB_ENV" ;;
           esac
-
-      - name: Installer les dépendances Linux
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build ccache xvfb \
-            libasound2-dev libfreetype-dev libfontconfig1-dev \
-            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev \
-            libxrandr-dev libxrender-dev libxi-dev libegl-dev libglu1-mesa-dev mesa-common-dev
 
       - name: Configurer
         shell: bash
@@ -88,10 +76,7 @@ jobs:
           unzip -q pluginval.zip -d pluginval
           chmod +x "$PLUGINVAL" || true
 
-          RUN=""
-          if [ "$RUNNER_OS" = "Linux" ]; then RUN="xvfb-run -a"; fi
-
-          $RUN "$PLUGINVAL" --strictness-level 10 --timeout-ms 300000 \
+          "$PLUGINVAL" --strictness-level 10 --timeout-ms 300000 \
             --validate "build/SubdAmp_artefacts/Release/VST3/SubdAmp.vst3"
 
       - name: Préparer l'archive
@@ -110,9 +95,6 @@ jobs:
             Windows)
               cp "$ARTEFACTS/Standalone/SubdAmp.exe" dist/
               7z a "$ARCHIVE" ./dist/* > /dev/null ;;
-            Linux)
-              cp "$ARTEFACTS/Standalone/SubdAmp" dist/
-              (cd dist && zip -qr "../$ARCHIVE" .) ;;
           esac
 
       - name: Publier les binaires

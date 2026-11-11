@@ -91,7 +91,7 @@ processeur antérieur à 2013 : `-DSUBDAMP_NAM_AVX2=OFF`.
 ## Récupérer les binaires (sans rien compiler)
 
 Chaque push sur `main` déclenche une compilation sur GitHub (onglet **Actions**) pour
-Windows, macOS (universel Intel + Apple Silicon) et Linux. Dans le dernier run, la
+Windows et macOS (universel Intel + Apple Silicon). Dans le dernier run, la
 section **Artifacts** contient un zip par plateforme avec le VST3 et l'application.
 
 ### Windows
