@@ -75,6 +75,22 @@ TEST_CASE ("Migration 1 → 2 : ordre reconstruit depuis les positions, MIX au m
         REQUIRE_FALSE (state.getChildWithProperty ("id", retired).isValid());
 }
 
+TEST_CASE ("Les paramètres retirés sont enlevés de l'état chargé, le reste est intact", "[state]")
+{
+    auto state = makeState ({ { "inputGain", 2.0f }, { "gateMix", 50.0f }, { "outputGain", -1.0f } });
+    state.setProperty (chainOrderProperty, "gate amp", nullptr);
+    state.appendChild (juce::ValueTree ("AUTRE"), nullptr);
+
+    const std::array<ParameterDefault, 2> known {{ { "inputGain", 0.0f }, { "outputGain", 0.0f } }};
+    removeUnknownParameters (state, known);
+
+    REQUIRE_FALSE (state.getChildWithProperty ("id", "gateMix").isValid());
+    REQUIRE (valueOf (state, "inputGain") == 2.0f);
+    REQUIRE (valueOf (state, "outputGain") == -1.0f);
+    REQUIRE (state.getChildWithName ("AUTRE").isValid());          // seuls les PARAM sont concernés
+    REQUIRE (state.getProperty (chainOrderProperty).toString() == "gate amp");
+}
+
 //==============================================================================
 TEST_CASE ("Ordre de chaîne : lecture tolérante (inconnus, doublons, modules manquants)", "[chain]")
 {

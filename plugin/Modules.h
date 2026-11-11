@@ -16,13 +16,13 @@ struct ModuleInfo
     const char* pedalName;         // nom court sur la pédale
     dsp::LatencyTier tier;
     const char* enabledParameter;
-    const char* mixParameter;      // potard MIX (dry / wet)
+    const char* mixParameter;      // potard MIX (dry / wet) ; nul : pas de MIX (GATE), toujours 100 %
     bool isTexture;                // sortie stéréo, latence propre non compensée
 };
 
 /** Modules de la chaîne, partagés par le processeur et l'interface (dans l'ordre de ModuleId). */
 inline constexpr std::array<ModuleInfo, numModules> moduleInfos {{
-    { ModuleId::gate,       "GATE",       "GATE",    dsp::LatencyTier::live,     params::id::gateEnabled, params::id::gateMix, false },
+    { ModuleId::gate,       "GATE",       "GATE",    dsp::LatencyTier::live,     params::id::gateEnabled, nullptr,             false },
     { ModuleId::sub,        "SUB",        "SUB",     dsp::LatencyTier::live,     params::id::subEnabled,  params::id::subMix,  false },
     { ModuleId::whammy,     "WHAMMY",     "WHAMMY",  dsp::LatencyTier::playable, params::id::whEnabled,   params::id::whMix,   false },
     { ModuleId::harmonizer, "HARMONIZER", "HARMO",   dsp::LatencyTier::playable, params::id::hmEnabled,   params::id::hmMix,   false },

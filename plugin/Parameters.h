@@ -18,6 +18,7 @@ namespace subdamp::params
     Identifiants retirés avec la chaîne en série (état version 2), à ne jamais réutiliser :
     subPosition, subDry, whPosition, hmPosition, hmDirect, fsPosition, shSource, shLevel,
     poSource, frSource, frLevel, grSource, grLevel.
+    Retiré ensuite : gateMix (un gate à moitié mélangé n'a pas de sens).
 */
 namespace id
 {
@@ -30,7 +31,6 @@ namespace id
     inline constexpr const char* gateEnabled   = "gateEnabled";
     inline constexpr const char* gateThreshold = "gateThreshold";
     inline constexpr const char* gateRelease   = "gateRelease";
-    inline constexpr const char* gateMix       = "gateMix";
 
     // Ampli (capture NAM + égaliseur)
     inline constexpr const char* ampEnabled = "ampEnabled";

@@ -145,8 +145,11 @@ public:
     // État pour l'interface (thread de l'interface)
     bool isModuleEnabled (ModuleId module) const noexcept;
 
-    /** MIX du module, de 0 à 1. */
+    /** MIX du module, de 0 à 1 (1 pour un module sans MIX, comme le GATE). */
     float getModuleMix (ModuleId module) const noexcept;
+
+    /** Coupure du GATE, pour son voyant : 0 (le son passe, ou gate arrêté) à 1 (il coupe). */
+    float getGateCutting() const noexcept { return gateCutting.load (std::memory_order_relaxed); }
 
     /** Retard propre à un module, en millisecondes. */
     double getModuleLatencyMs (ModuleId module) const noexcept;
@@ -289,6 +292,7 @@ private:
     std::atomic<double> preparedSampleRate { 0.0 }; // lu par l'interface pour convertir les latences
 
     LevelMeters meters;
+    std::atomic<float> gateCutting { 0.0f };
 
     //==============================================================================
     // Fichiers

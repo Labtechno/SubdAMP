@@ -2,6 +2,7 @@
 
 #include "plugin/ChainOrder.h"
 
+#include <algorithm>
 #include <vector>
 
 namespace subdamp::state
@@ -127,6 +128,24 @@ void addMissingParameters (juce::ValueTree& state, std::span<const ParameterDefa
         child.setProperty (parameterIdProperty, parameter.id, nullptr);
         child.setProperty (parameterValueProperty, parameter.value, nullptr);
         state.appendChild (child, nullptr);
+    }
+}
+
+void removeUnknownParameters (juce::ValueTree& state, std::span<const ParameterDefault> knownParameters)
+{
+    for (int i = state.getNumChildren(); --i >= 0;)
+    {
+        const auto child = state.getChild (i);
+
+        if (! child.hasType (parameterType))
+            continue;
+
+        const auto id = child.getProperty (parameterIdProperty).toString();
+        const auto known = std::any_of (knownParameters.begin(), knownParameters.end(),
+                                        [&id] (const ParameterDefault& parameter) { return parameter.id == id; });
+
+        if (! known)
+            state.removeChild (i, nullptr);
     }
 }
 

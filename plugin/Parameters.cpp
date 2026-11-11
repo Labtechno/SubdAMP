@@ -192,8 +192,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         makeSwitch (id::gateEnabled, addedInVersion2, "Gate", true),
         makeDecibels (id::gateThreshold, addedInVersion2, "Gate seuil", -90.0f, -20.0f, -65.0f),
         makeFloat (id::gateRelease, addedInVersion2, utf8 ("Gate relâchement"),
-                   { 10.0f, 500.0f, 1.0f, 0.5f }, 80.0f, "ms", formatMilliseconds),
-        makeMix (id::gateMix, "Gate", 100.0f)));
+                   { 10.0f, 500.0f, 1.0f, 0.5f }, 80.0f, "ms", formatMilliseconds)));
 
     // SUB, HARMONIZER : MIX 100 % = les voix seules, sans le son direct.
     layout.add (group ("sub", "SUB",

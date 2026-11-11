@@ -27,6 +27,9 @@ public:
     /** Vrai si le gate laisse passer le signal (pour un témoin dans l'interface). */
     bool isOpen() const noexcept { return open; }
 
+    /** Ouverture actuelle, de 0 (fermé) à 1 (ouvert) : suit l'attaque puis la relâche. */
+    float getOpening() const noexcept { return gain; }
+
 private:
     float coefficientFor (double milliseconds) const noexcept;
 

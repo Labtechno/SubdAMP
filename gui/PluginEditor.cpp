@@ -159,9 +159,11 @@ void SubdAmpEditor::buildCards()
         cards[indexOf (info.id)] = std::make_unique<ModuleCard> (parameters, utf8 (info.name), info.tier, info.enabledParameter);
 
     auto& gate = cardFor (ModuleId::gate);
-    gate.setDescription (utf8 ("Coupe le souffle entre les notes. Hystérésis et maintien : les fins de notes ne hachent pas."));
+    gate.setDescription (utf8 ("Coupe le souffle entre les notes. Hystérésis et maintien : les fins de notes ne hachent pas. Le voyant s'allume quand il coupe."));
     gate.addKnob (params::id::gateThreshold, "SEUIL");
     gate.addKnob (params::id::gateRelease, utf8 ("RELÂCHE"));
+    gate.addLamp (utf8 ("ÉTAT"), [this] { return subdAmp.getGateCutting(); }, theme::error, "COUPE", "PASSE")
+        .setTooltip (utf8 ("S'allume quand le gate coupe : pendant la relâche, puis entre les notes. Éteint quand le son passe."));
 
     auto& sub = cardFor (ModuleId::sub);
     sub.setDescription (utf8 ("Octaver analogique : une et deux octaves en dessous, une au-dessus. Sans latence, sur notes isolées. MIX 100 % : octaves seules."));
@@ -254,9 +256,10 @@ void SubdAmpEditor::buildCards()
     freqShift.addKnob (params::id::fsShift, utf8 ("DÉCALAGE"));
     freqShift.addKnob (params::id::fsFeedback, "RETOUR");
 
-    // Chaque module : son MIX, isolé à droite du panneau.
+    // Chaque module : son MIX, isolé à droite du panneau (sauf le GATE, qui n'en a pas).
     for (const auto& info : moduleInfos)
-        cardFor (info.id).setMixKnob (info.mixParameter);
+        if (info.mixParameter != nullptr)
+            cardFor (info.id).setMixKnob (info.mixParameter);
 
     for (auto& card : cards)
         addChildComponent (*card);
@@ -276,6 +279,7 @@ void SubdAmpEditor::selectModule (ModuleId module)
         cardFor (info.id).setVisible (info.id == module);
 
     cardFor (module).refreshLatency();
+    cardFor (module).refreshLamps();
 }
 
 void SubdAmpEditor::moveModule (ModuleId module, int newIndex)
@@ -407,6 +411,7 @@ void SubdAmpEditor::timerCallback()
     }
 
     cardFor (subdAmp.openModule).refreshLatency();
+    cardFor (subdAmp.openModule).refreshLamps();
 }
 
 } // namespace subdamp::gui

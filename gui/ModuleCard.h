@@ -21,6 +21,32 @@ public:
 };
 
 /**
+    Voyant façon LED de pédale : sa luminosité suit un niveau de 0 à 1, relu par refresh()
+    (minuteur de l'interface). Un texte sous la lampe dit l'état en clair.
+*/
+class StatusLamp final : public juce::Component,
+                         public juce::SettableTooltipClient
+{
+public:
+    StatusLamp (std::function<float()> levelProvider, juce::Colour litColour,
+                const juce::String& litText, const juce::String& unlitText);
+
+    void refresh();
+    void setScale (float newScale) { scale = newScale; repaint(); }
+
+    float getShownLevel() const noexcept { return shownLevel; }
+
+    void paint (juce::Graphics& g) override;
+
+private:
+    std::function<float()> level;
+    juce::Colour colour;
+    juce::String litText, unlitText;
+    float shownLevel = 0.0f;
+    float scale = 1.0f;
+};
+
+/**
     Panneau des réglages d'un module, affiché en grand sous le pédalier : titre, description,
     badge de latence, interrupteur, potards et listes déroulantes, potard MIX à part à droite,
     et un composant libre (sélecteur de fichier de l'ampli et du cab).
@@ -47,6 +73,13 @@ public:
     /** Potard MIX (dry / wet), isolé à droite des réglages. */
     void setMixKnob (const char* parameterId);
 
+    /** Voyant d'état (coupure du GATE...), placé avec les réglages. */
+    StatusLamp& addLamp (const juce::String& label, std::function<float()> level, juce::Colour litColour,
+                         const juce::String& litText, const juce::String& unlitText, int baseWidth = 110);
+
+    /** Relit les voyants (minuteur de l'interface). */
+    void refreshLamps();
+
     void setDescription (const juce::String& text) { description = text; repaint(); }
 
     /** Composant affiché à droite des réglages (non possédé), avec sa taille à l'échelle 1. */
@@ -68,6 +101,7 @@ private:
         std::unique_ptr<juce::Slider> slider;
         std::unique_ptr<juce::ComboBox> combo;
         std::unique_ptr<juce::TextButton> toggle;
+        std::unique_ptr<StatusLamp> lamp;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sliderAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> comboAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> toggleAttachment;

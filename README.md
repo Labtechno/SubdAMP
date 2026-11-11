@@ -9,7 +9,7 @@ Le signal est stéréo de bout en bout.
 
 | Module | Rôle | Latence |
 |---|---|---|
-| GATE | Noise gate à hystérésis, ouverture instantanée, relâchement réglable | LIVE (0) |
+| GATE | Noise gate à hystérésis, ouverture instantanée, relâchement réglable ; voyant rouge quand il coupe ; pas de MIX | LIVE (0) |
 | SUB | Octaver analogique façon OC-2 : -1 et -2 octaves, +1 octave (fuzz), tonalité | LIVE (0) |
 | WHAMMY | Transposition polyphonique ±2 octaves ; mode fixe ou glissement relancé à chaque attaque | JOUABLE (15 ms) |
 | HARMONIZER | 2 voix diatoniques (tonalité + gamme), formants réglables ; la part sèche du MIX reste sans latence | JOUABLE (≈ 1,5 à 2,5 périodes : 5 à 25 ms) |
@@ -26,7 +26,8 @@ enregistré avec la session ou le preset. Le changement passe par un fondu de 20
 « pop » comme en rebranchant de vraies pédales). Ordre d'un nouveau réglage :
 GATE → SUB → WHAMMY → AMPLI → CAB → HARMO → FREQ → POLY → GRAIN → FREEZE → SHIMMER.
 
-**MIX** : à 100 %, seul le son traité sort ; à 0 %, le module est transparent. Quelques cas :
+**MIX** : à 100 %, seul le son traité sort ; à 0 %, le module est transparent. Tous les modules
+en ont un, sauf le GATE (un gate à moitié mélangé n'a pas de sens). Quelques cas :
 - SUB et HARMONIZER : le traité ne contient que les voix (les anciens réglages DIRECT sont
   remplacés par le MIX) ;
 - FREEZE : la nappe s'ajoute au jeu, qui n'est jamais atténué (MIX = niveau de la nappe) ;

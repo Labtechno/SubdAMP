@@ -139,7 +139,7 @@ SubdAmpProcessor::SubdAmpProcessor()
     for (const auto& info : moduleInfos)
     {
         enabledValues[indexOf (info.id)] = &rawParameter (parameters, info.enabledParameter);
-        mixValues[indexOf (info.id)] = &rawParameter (parameters, info.mixParameter);
+        mixValues[indexOf (info.id)] = info.mixParameter != nullptr ? &rawParameter (parameters, info.mixParameter) : nullptr;
     }
 
     // FREEZE : la nappe s'ajoute au jeu (MIX = son niveau), qui n'est jamais atténué.
@@ -321,6 +321,11 @@ void SubdAmpProcessor::processChunk (float* leftSamples, float* rightSamples, in
 
     bypass.processStereo (dry, left, right);
 
+    // Voyant du GATE : il s'allume quand le gate coupe (relâche, puis silence entre les notes).
+    // Arrêté ou contourné, le gate ne coupe rien : voyant éteint.
+    const auto gateRunning = ! bypass.isFullyBypassed() && isOn (*enabledValues[indexOf (ModuleId::gate)]);
+    gateCutting.store (gateRunning ? 1.0f - gate.getOpening() : 0.0f, std::memory_order_relaxed);
+
     publishPeak (meters.outputPeak, std::max (dsp::blockPeak (left), dsp::blockPeak (right)));
 }
 
@@ -384,9 +389,8 @@ void SubdAmpProcessor::updateTargetsFromParameters() noexcept
         auto& slot = slotFor (info.id);
         slot.setEnabled (isOn (*enabledValues[indexOf (info.id)]));
 
-        const auto mix = load (*mixValues[indexOf (info.id)]) * 0.01f;
         const auto mixesInternally = info.id == ModuleId::whammy || info.id == ModuleId::freqShift;
-        slot.setMix (mixesInternally ? 1.0f : mix);
+        slot.setMix (mixesInternally ? 1.0f : getModuleMix (info.id));
     }
 
     whammy.setMix (load (*mixValues[indexOf (ModuleId::whammy)]) * 0.01f);
@@ -481,6 +485,7 @@ void SubdAmpProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     const auto defaults = collectDefaults (*this);
     state::addMissingParameters (loaded, defaults);
+    state::removeUnknownParameters (loaded, defaults);
 
     parameters.replaceState (loaded);
     restoreChainOrderFromState();
@@ -645,7 +650,8 @@ bool SubdAmpProcessor::isModuleEnabled (ModuleId module) const noexcept
 
 float SubdAmpProcessor::getModuleMix (ModuleId module) const noexcept
 {
-    return load (*mixValues[indexOf (module)]) * 0.01f;
+    const auto* value = mixValues[indexOf (module)];
+    return value != nullptr ? load (*value) * 0.01f : 1.0f;
 }
 
 double SubdAmpProcessor::getModuleLatencyMs (ModuleId module) const noexcept

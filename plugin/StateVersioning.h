@@ -60,4 +60,11 @@ MigrationResult migrateToCurrentVersion (juce::ValueTree& state);
 */
 void addMissingParameters (juce::ValueTree& state, std::span<const ParameterDefault> defaults);
 
+/**
+    Retire de l'état chargé les paramètres qui n'existent plus (identifiants retirés, voir
+    Parameters.h). Sans cela, ils resteraient dans chaque session réenregistrée. Les états
+    d'une version plus récente ayant été refusés avant, un inconnu est forcément un retiré.
+*/
+void removeUnknownParameters (juce::ValueTree& state, std::span<const ParameterDefault> knownParameters);
+
 } // namespace subdamp::state

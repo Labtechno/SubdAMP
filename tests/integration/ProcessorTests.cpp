@@ -525,6 +525,77 @@ TEST_CASE ("L'ordre choisi est bien celui du traitement (SUB puis FREQ SHIFT, ou
     REQUIRE (magnitudeAt (shiftFirst, 250.0, 48000.0) > 4.0 * magnitudeAt (shiftFirst, 300.0, 48000.0));
 }
 
+TEST_CASE ("Voyant du GATE : éteint quand le son passe, allumé quand il coupe, éteint s'il est arrêté", "[processor]")
+{
+    JuceEnvironment juce;
+    auto processor = createProcessor();
+    processor->prepareToPlay (48000.0, 64);
+    setParameter (*processor, params::id::gateRelease, 80.0f);
+
+    SignalRunner runner { *processor, 48000.0, 64 };
+
+    // Une note bien au-dessus du seuil : le gate est ouvert, le voyant éteint.
+    for (int i = 0; i < 100; ++i)
+        runner.processBlock();
+
+    REQUIRE (processor->getGateCutting() < 0.01f);
+
+    // Silence : après le maintien (50 ms), la relâche referme le gate et le voyant s'allume.
+    const auto silence = [&] (int blocks)
+    {
+        for (int i = 0; i < blocks; ++i)
+        {
+            runner.buffer.clear();
+            processor->processBlock (runner.buffer, runner.midi);
+        }
+    };
+
+    silence (30); // 40 ms : encore dans le maintien
+    REQUIRE (processor->getGateCutting() < 0.01f);
+
+    silence (300); // 400 ms de plus : relâche terminée
+    REQUIRE (processor->getGateCutting() > 0.95f);
+
+    // GATE arrêté : il ne coupe rien, voyant éteint.
+    setParameter (*processor, params::id::gateEnabled, 0.0f);
+    silence (20);
+    REQUIRE (processor->getGateCutting() <= 0.0f);
+}
+
+TEST_CASE ("Le GATE n'a pas de MIX ; un réglage qui en contenait un se charge sans lui", "[processor][state]")
+{
+    JuceEnvironment juce;
+    auto processor = createProcessor();
+
+    REQUIRE (processor->getParameters().getParameter ("gateMix") == nullptr);
+    REQUIRE (processor->getModuleMix (ModuleId::gate) == Catch::Approx (1.0f));
+
+    // État enregistré par la version précédente, avec le MIX du GATE à 50 %.
+    juce::XmlElement saved ("SubdAmpState");
+    saved.setAttribute ("stateVersion", 2);
+    saved.setAttribute ("chainOrder", formatChainOrder (defaultChainOrder));
+
+    for (const auto& [id, value] : { std::pair { "gateMix", 50.0 }, std::pair { "gateThreshold", -50.0 } })
+    {
+        auto* parameter = saved.createNewChildElement ("PARAM");
+        parameter->setAttribute ("id", id);
+        parameter->setAttribute ("value", value);
+    }
+
+    juce::MemoryBlock data;
+    juce::AudioProcessor::copyXmlToBinary (saved, data);
+    processor->setStateInformation (data.getData(), static_cast<int> (data.getSize()));
+
+    REQUIRE (parameterValue (*processor, params::id::gateThreshold) == Catch::Approx (-50.0f));
+
+    // Réenregistré, l'état ne garde pas l'identifiant retiré.
+    juce::MemoryBlock resaved;
+    processor->getStateInformation (resaved);
+    const auto xml = juce::AudioProcessor::getXmlFromBinary (resaved.getData(), static_cast<int> (resaved.getSize()));
+    REQUIRE (xml != nullptr);
+    REQUIRE (xml->getChildByAttribute ("id", "gateMix") == nullptr);
+}
+
 TEST_CASE ("Un fichier de capture introuvable est signalé sans planter", "[processor]")
 {
     JuceEnvironment juce;
@@ -563,6 +634,13 @@ TEST_CASE ("Capture d'écran de l'interface avec une capture et une IR chargées
 
     for (int i = 0; i < 300; ++i)
         runner.processBlock (164.81f);
+
+    // Puis un court silence : le GATE se referme, son voyant s'allume sur la capture.
+    for (int i = 0; i < 200; ++i)
+    {
+        runner.buffer.clear();
+        processor->processBlock (runner.buffer, runner.midi);
+    }
 
     // Une capture par module ouvert. Les fichiers sont déjà chargés : l'interface affiche
     // leur état dès sa création.

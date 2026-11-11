@@ -28,6 +28,60 @@ void PowerButton::paintButton (juce::Graphics& g, bool isHighlighted, bool)
 }
 
 //==============================================================================
+StatusLamp::StatusLamp (std::function<float()> levelProvider, juce::Colour litColour,
+                        const juce::String& lit, const juce::String& unlit)
+    : level (std::move (levelProvider)), colour (litColour), litText (lit), unlitText (unlit)
+{
+    setInterceptsMouseClicks (true, false); // pour l'infobulle
+}
+
+void StatusLamp::refresh()
+{
+    const auto value = juce::jlimit (0.0f, 1.0f, level != nullptr ? level() : 0.0f);
+
+    // Redessin seulement si la différence se voit.
+    if (std::abs (value - shownLevel) > 0.02f || (value <= 0.0f) != (shownLevel <= 0.0f))
+    {
+        shownLevel = value;
+        repaint();
+    }
+}
+
+void StatusLamp::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+    const auto textHeight = 20.0f * scale;
+    const auto lampArea = bounds.withTrimmedBottom (textHeight + 6.0f * scale);
+    const auto diameter = juce::jmin (34.0f * scale, lampArea.getWidth(), lampArea.getHeight());
+    const auto lamp = juce::Rectangle<float> (diameter, diameter).withCentre (lampArea.getCentre());
+
+    // Halo, proportionnel à l'intensité
+    if (shownLevel > 0.0f)
+    {
+        g.setColour (colour.withAlpha (0.28f * shownLevel));
+        g.fillEllipse (lamp.expanded (7.0f * scale * shownLevel));
+    }
+
+    // Verre éteint, puis lumière par-dessus
+    g.setColour (theme::meterBackground);
+    g.fillEllipse (lamp);
+    g.setColour (colour.withAlpha (0.12f + 0.88f * shownLevel));
+    g.fillEllipse (lamp.reduced (2.0f * scale));
+
+    // Reflet
+    g.setColour (juce::Colours::white.withAlpha (0.12f + 0.18f * shownLevel));
+    g.fillEllipse (lamp.reduced (diameter * 0.28f).translated (-diameter * 0.12f, -diameter * 0.12f).withHeight (diameter * 0.22f));
+
+    g.setColour (theme::panelOutline.brighter (0.3f));
+    g.drawEllipse (lamp, 1.0f * scale);
+
+    const auto isLit = shownLevel >= 0.5f;
+    g.setColour (isLit ? colour : theme::textDim);
+    g.setFont (juce::FontOptions (12.0f * scale, juce::Font::bold));
+    g.drawText (isLit ? litText : unlitText, bounds.removeFromBottom (textHeight), juce::Justification::centred);
+}
+
+//==============================================================================
 namespace
 {
     constexpr int headerHeight = 64;
@@ -122,6 +176,23 @@ void ModuleCard::addChoice (const char* parameterId, const juce::String& labelTe
     updateEnabledLook();
 }
 
+StatusLamp& ModuleCard::addLamp (const juce::String& labelText, std::function<float()> level, juce::Colour litColour,
+                                 const juce::String& litText, const juce::String& unlitText, int baseWidth)
+{
+    auto& control = addControl (labelText, baseWidth);
+    control.lamp = std::make_unique<StatusLamp> (std::move (level), litColour, litText, unlitText);
+    addAndMakeVisible (*control.lamp);
+    updateEnabledLook();
+    return *control.lamp;
+}
+
+void ModuleCard::refreshLamps()
+{
+    for (auto& control : controls)
+        if (control->lamp != nullptr)
+            control->lamp->refresh();
+}
+
 void ModuleCard::setFooter (juce::Component* component, int baseWidth, int baseHeight)
 {
     footer = component;
@@ -187,6 +258,9 @@ void ModuleCard::updateEnabledLook()
 
         if (control->toggle != nullptr)
             control->toggle->setAlpha (alpha);
+
+        if (control->lamp != nullptr)
+            control->lamp->setAlpha (alpha);
     }
 
     repaint();
@@ -313,6 +387,11 @@ void ModuleCard::layoutControl (Control& control, juce::Rectangle<int> cell)
     else if (control.toggle != nullptr)
     {
         control.toggle->setBounds (cell.withSizeKeepingCentre (cell.getWidth(), px (64.0f)).translated (0, -px (10.0f)));
+    }
+    else if (control.lamp != nullptr)
+    {
+        control.lamp->setScale (scale);
+        control.lamp->setBounds (cell.withSizeKeepingCentre (cell.getWidth(), px (76.0f)).translated (0, -px (6.0f)));
     }
 }
 

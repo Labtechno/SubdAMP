@@ -16,7 +16,7 @@ public:
     Pedal (PedalBoard& ownerBoard, const ModuleInfo& moduleInfo, juce::AudioProcessorValueTreeState& parameters)
         : owner (ownerBoard),
           info (moduleInfo),
-          mixValue (parameters.getRawParameterValue (moduleInfo.mixParameter))
+          mixValue (moduleInfo.mixParameter != nullptr ? parameters.getRawParameterValue (moduleInfo.mixParameter) : nullptr)
     {
         setTooltip (juce::String::fromUTF8 ("Clic : réglages — glisser : changer de place — LED : marche / arrêt"));
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
