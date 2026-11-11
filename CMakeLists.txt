@@ -54,6 +54,7 @@ target_sources(SubdAmp
         gui/FileSlot.cpp
         gui/LevelMeter.cpp
         gui/ModuleCard.cpp
+        gui/PedalBoard.cpp
         gui/PluginEditor.cpp
         standalone/AudioSettingsPanel.cpp
         standalone/StandaloneApp.cpp

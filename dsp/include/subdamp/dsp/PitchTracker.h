@@ -1,0 +1,74 @@
+#pragma once
+
+#include "subdamp/dsp/Biquad.h"
+
+#include <array>
+#include <cstdint>
+#include <vector>
+
+namespace subdamp::dsp
+{
+
+/**
+    Détecteur de hauteur monophonique (algorithme YIN) réglé pour la guitare 6 cordes :
+    de 60 Hz (drop C et un peu en dessous) à 1400 Hz (24e case de la corde de Mi aigu).
+
+    Pour tenir le temps réel à faible coût :
+      1. l'analyse YIN tourne sur un signal décimé vers ~12 kHz, toutes les 4 ms ;
+      2. la période trouvée est ensuite affinée à pleine résolution, dans une plage étroite
+         autour de l'estimation (précision de l'ordre du centième de demi-ton).
+
+    Le voisement (note tenue ou non) a une hystérésis : la détection ne bascule pas sans
+    arrêt sur une note qui s'éteint ou pendant un bend.
+*/
+class PitchTracker
+{
+public:
+    /** Peut allouer. */
+    void prepare (double sampleRate, double minHz = 60.0, double maxHz = 1400.0);
+    void reset() noexcept;
+
+    /** Ajoute un échantillon ; l'estimation est mise à jour toutes les 4 ms. */
+    void push (float sample) noexcept;
+
+    bool isVoiced() const noexcept { return voiced; }
+
+    /** Période en échantillons (pleine résolution), valide si isVoiced(). */
+    float getPeriod() const noexcept { return period; }
+
+    /** Indique qu'une nouvelle estimation vient d'être calculée (remis à faux à la lecture). */
+    bool takeNewEstimate() noexcept;
+
+private:
+    void analyse() noexcept;
+    float refineAtFullRate (float coarsePeriod) noexcept;
+
+    static constexpr float enterThreshold = 0.2f;   // CMND sous laquelle une note devient détectée
+    static constexpr float stayThreshold = 0.35f;   // ... et reste détectée
+    static constexpr float firstDipThreshold = 0.15f;
+    static constexpr float silenceRms = 0.001f;     // ≈ -60 dBFS
+
+    double sampleRate = 48000.0;
+    int decimation = 1;
+    std::array<Biquad, 2> antiAlias;
+    int decimationCounter = 0;
+
+    // Signal décimé
+    std::vector<float> decimated;
+    std::size_t decimatedMask = 0;
+    std::int64_t decimatedWritten = 0;
+    int tauMin = 2, tauMax = 200, window = 200, hop = 48, hopCounter = 0;
+    std::vector<float> frame, difference, normalised;
+
+    // Signal pleine résolution (affinage)
+    std::vector<float> full, fullFrame;
+    std::size_t fullMask = 0;
+    std::int64_t fullWritten = 0;
+    int fullTauMax = 800;
+
+    bool voiced = false;
+    bool hasNewEstimate = false;
+    float period = 0.0f;
+};
+
+} // namespace subdamp::dsp

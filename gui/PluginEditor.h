@@ -3,19 +3,22 @@
 #include "gui/FileSlot.h"
 #include "gui/LevelMeter.h"
 #include "gui/ModuleCard.h"
+#include "gui/PedalBoard.h"
 #include "plugin/PluginProcessor.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
+
+#include <array>
 
 namespace subdamp::gui
 {
 
 /**
-    Interface du plugin : entrée, chaîne de modules (gate → [PRE] → ampli → cab → [POST]),
-    sortie. Les cartes des modules de pitch se déplacent avant ou après l'ampli selon leur
-    paramètre de position.
+    Interface du plugin, façon pédalier :
+      - en haut, l'entrée, le pédalier dans l'ordre réel de la chaîne, la sortie ;
+      - en dessous, les réglages complets du module sélectionné.
 
-    L'interface ne lit l'audio qu'à travers des atomics (paramètres et LevelMeters) :
+    L'interface ne lit l'audio qu'à travers des atomics (paramètres, vumètres, latences) :
     aucun échange bloquant avec le thread audio.
 */
 class SubdAmpEditor final : public juce::AudioProcessorEditor,
@@ -33,10 +36,14 @@ private:
 
     void timerCallback() override;
     float scale() const noexcept;
-    std::vector<ModuleCard*> chainOrder();
 
-    static constexpr int baseWidth = 1400;
-    static constexpr int baseHeight = 500;
+    void selectModule (ModuleId module);
+    std::vector<ModuleId> chainOrder() const;
+    ModuleCard& cardFor (ModuleId module);
+    void buildCards();
+
+    static constexpr int baseWidth = 1200;
+    static constexpr int baseHeight = 560;
 
     SubdAmpProcessor& subdAmp;
     std::unique_ptr<LookAndFeel> lookAndFeel;
@@ -48,17 +55,15 @@ private:
     LevelMeter inputMeter, outputMeter;
 
     FileSlot ampFile, cabFile;
-    ModuleCard gateCard, subCard, ampCard, cabCard, shifterCard;
+    PedalBoard pedalBoard;
+    std::array<std::unique_ptr<ModuleCard>, moduleInfos.size()> cards;
 
     // Après les composants : détruites en premier.
     juce::AudioProcessorValueTreeState::SliderAttachment inputAttachment, outputAttachment;
     juce::AudioProcessorValueTreeState::ButtonAttachment bypassAttachment;
 
-    std::atomic<float>& subPosition;
-    std::atomic<float>& shifterPosition;
-    std::pair<bool, bool> layoutPositions { false, false };
-
-    int displayedLatency = 0;
+    std::vector<ModuleId> shownOrder;
+    LatencyStatus shownLatency;
     double lastTimerSeconds = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SubdAmpEditor)

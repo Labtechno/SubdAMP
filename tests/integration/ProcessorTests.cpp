@@ -4,6 +4,7 @@
 
 #include "plugin/Parameters.h"
 #include "plugin/PluginProcessor.h"
+#include "subdamp/dsp/PitchTracker.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -123,7 +124,7 @@ namespace
 }
 
 //==============================================================================
-TEST_CASE ("Chaîne complète (gate, SUB, ampli NAM, IR, FREQ SHIFT) sans aucune allocation dans processBlock", "[processor][realtime]")
+TEST_CASE ("Chaîne complète (tous les modules, ampli NAM, IR) sans aucune allocation dans processBlock", "[processor][realtime]")
 {
     JuceEnvironment juce;
     const auto sampleRate = GENERATE (48000.0, 88200.0);
@@ -136,6 +137,9 @@ TEST_CASE ("Chaîne complète (gate, SUB, ampli NAM, IR, FREQ SHIFT) sans aucune
     setParameter (*processor, params::id::subEnabled, 1.0f);
     setParameter (*processor, params::id::fsEnabled, 1.0f);
     setParameter (*processor, params::id::subDown2, 50.0f);
+    setParameter (*processor, params::id::whEnabled, 1.0f);
+    setParameter (*processor, params::id::hmEnabled, 1.0f);
+    setParameter (*processor, params::id::hmVoice2, 12.0f); // +5te
 
     processor->loadAmpModel (exampleModels.getChildFile ("wavenet.nam"));
     processor->loadCabImpulseResponse (writeTestImpulseResponse (juce::File::getSpecialLocation (juce::File::tempDirectory)));
@@ -154,6 +158,64 @@ TEST_CASE ("Chaîne complète (gate, SUB, ampli NAM, IR, FREQ SHIFT) sans aucune
 
     REQUIRE (counter.count() == 0);
     REQUIRE (runner.outputIsFinite());
+}
+
+TEST_CASE ("Les paramètres de l'HARMONIZER pilotent le module (Mi mineur, quinte au-dessus)", "[processor]")
+{
+    JuceEnvironment juce;
+    auto processor = createProcessor();
+    processor->prepareToPlay (48000.0, 64);
+
+    REQUIRE (params::harmonyVoiceSteps (0) == std::nullopt);
+    REQUIRE (params::harmonyVoiceSteps (10) == 2);  // +3ce
+    REQUIRE (params::harmonyVoiceSteps (12) == 4);  // +5te
+    REQUIRE (params::harmonyVoiceSteps (1) == -14); // -2 octaves
+
+    // Chaîne réduite à l'harmonizer, son direct coupé : on n'entend que la voix.
+    setParameter (*processor, params::id::gateEnabled, 0.0f);
+    setParameter (*processor, params::id::cabEnabled, 0.0f);
+    setParameter (*processor, params::id::hmEnabled, 1.0f);
+    setParameter (*processor, params::id::hmVoice1, 12.0f);
+    setParameter (*processor, params::id::hmLevel1, 100.0f);
+    setParameter (*processor, params::id::hmDirect, 0.0f);
+
+    // Mi grave (82,41 Hz), dent de scie riche en harmoniques
+    juce::AudioBuffer<float> buffer (2, 64);
+    juce::MidiBuffer midi;
+    std::vector<float> output;
+    double phase = 0.0;
+
+    for (int block = 0; block < 1500; ++block)
+    {
+        for (int i = 0; i < 64; ++i)
+        {
+            float sample = 0.0f;
+
+            for (int k = 1; k < 40; ++k)
+                sample += 0.2f * static_cast<float> (std::sin (k * phase)) / static_cast<float> (k);
+
+            buffer.setSample (0, i, sample);
+            phase += 2.0 * juce::MathConstants<double>::pi * 82.41 / 48000.0;
+        }
+
+        processor->processBlock (buffer, midi);
+        output.insert (output.end(), buffer.getReadPointer (0), buffer.getReadPointer (0) + 64);
+    }
+
+    dsp::PitchTracker tracker;
+    tracker.prepare (48000.0);
+
+    for (std::size_t i = output.size() / 2; i < output.size(); ++i)
+        tracker.push (output[i]);
+
+    REQUIRE (tracker.isVoiced());
+    const auto expected = 82.41 * std::exp2 (7.0 / 12.0); // Si
+    REQUIRE (std::abs (1200.0 * std::log2 (48000.0 / tracker.getPeriod() / expected)) < 5.0);
+
+    // Badge : l'HARMONIZER allumé fait passer la latence perçue en JOUABLE.
+    REQUIRE (processor->getLatencyStatus().tier == dsp::LatencyTier::playable);
+    setParameter (*processor, params::id::hmEnabled, 0.0f);
+    REQUIRE (processor->getLatencyStatus().tier == dsp::LatencyTier::live);
 }
 
 TEST_CASE ("Une capture rééchantillonnée déclare sa latence à l'hôte", "[processor]")
@@ -283,19 +345,33 @@ TEST_CASE ("Capture d'écran de l'interface avec une capture et une IR chargées
     auto processor = createProcessor();
     processor->prepareToPlay (48000.0, 64);
     setParameter (*processor, params::id::subEnabled, 1.0f);
+    setParameter (*processor, params::id::hmEnabled, 1.0f);
     setParameter (*processor, params::id::fsPosition, 0.0f); // FREQ SHIFT avant l'ampli
     processor->loadAmpModel (exampleModels.getChildFile ("wavenet.nam"));
     processor->loadCabImpulseResponse (writeTestImpulseResponse (juce::File::getSpecialLocation (juce::File::tempDirectory)));
     waitForAmpModel (*processor);
 
-    std::unique_ptr<juce::AudioProcessorEditor> editor (processor->createEditorAndMakeActive());
-    REQUIRE (editor != nullptr);
+    // Une note jouée, pour que la latence de l'HARMONIZER soit mesurée.
+    SignalRunner runner { *processor, 48000.0, 64 };
 
-    // Les fichiers sont déjà chargés : l'interface affiche leur état dès sa création.
-    const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
-    const auto file = juce::File (folder).getChildFile ("subdamp-editor.png");
-    file.deleteFile();
+    for (int i = 0; i < 300; ++i)
+        runner.processBlock (164.81f);
 
-    juce::FileOutputStream stream (file);
-    REQUIRE (juce::PNGImageFormat().writeImageToStream (image, stream));
+    // Une capture par module ouvert. Les fichiers sont déjà chargés : l'interface affiche
+    // leur état dès sa création.
+    for (const auto& info : moduleInfos)
+    {
+        processor->openModule = info.id;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor->createEditorAndMakeActive());
+        REQUIRE (editor != nullptr);
+
+        const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+        const auto file = juce::File (folder).getChildFile (juce::String ("subdamp-") + info.pedalName + ".png");
+        file.deleteFile();
+
+        juce::FileOutputStream stream (file);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (image, stream));
+
+        processor->editorBeingDeleted (editor.get());
+    }
 }

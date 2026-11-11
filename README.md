@@ -3,17 +3,34 @@
 Plugin guitare (VST3 + application standalone) orienté pitch : octaver, whammy,
 harmonizer, frequency shifter, shimmer, textures. Usage personnel.
 
-**État : étape 2.** Chaîne `entrée → GATE → [avant l'ampli] → AMPLI → CAB → [après l'ampli] → sortie`.
+**État : étape 3.** Chaîne `entrée → GATE → [avant l'ampli] → AMPLI → CAB → [après l'ampli] → sortie`.
 
 | Module | Rôle | Latence |
 |---|---|---|
 | GATE | Noise gate à hystérésis, ouverture instantanée, relâchement réglable | LIVE (0) |
 | SUB | Octaver analogique façon OC-2 : -1 et -2 octaves, +1 octave (fuzz), tonalité | LIVE (0) |
+| WHAMMY | Transposition polyphonique ±2 octaves ; mode fixe ou glissement relancé à chaque attaque | JOUABLE (15 ms) |
+| HARMONIZER | 2 voix diatoniques (tonalité + gamme), formants réglables ; son direct sans latence | JOUABLE (≈ 1,5 à 2,5 périodes : 5 à 25 ms) |
 | AMPLI | Capture Neural Amp Modeler (`.nam`) + gain, égaliseur 3 bandes, niveau | LIVE (0 à 48 kHz, < 1 ms sinon) |
 | CAB | Réponse impulsionnelle (`.wav`, `.aif`), ou cab interne par filtres | LIVE (0) |
 | FREQ SHIFT | Décaleur de fréquence (type Bode), mix, réinjection | LIVE (≈ 0) |
 
-SUB et FREQ SHIFT se placent avant ou après l'ampli (bouton sur leur carte), sans clic.
+SUB, WHAMMY, HARMONIZER et FREQ SHIFT se placent avant ou après l'ampli (bouton sur leur
+panneau), sans clic. Dans un même emplacement, l'ordre est SUB → WHAMMY → HARMONIZER → FREQ SHIFT.
+
+**Interface** : pédalier en haut, dans l'ordre réel de la chaîne (clic sur une pédale pour
+ouvrir ses réglages, clic sur sa LED pour l'allumer). La couleur du haut de chaque pédale et
+le badge en haut à droite indiquent la latence : vert LIVE, orange JOUABLE, violet TEXTURE.
+
+### Comment marchent les modules de pitch
+
+- **WHAMMY** : ligne à retard lue à vitesse variable, avec raccords alignés par corrélation
+  (type WSOLA) : peu de battement, même sur les accords. En mode attaque, un détecteur de coup
+  de médiator relance le glissement ; près de l'unisson, le module s'efface au profit du son direct.
+- **HARMONIZER** : détection de hauteur YIN (décimée puis affinée, précision ≈ 1 centième de
+  demi-ton, de 60 à 1400 Hz) et synthèse TD-PSOLA, qui garde le timbre de la note. Les voix
+  suivent les bends et le vibrato ; le niveau de chaque voix est ramené à celui de la note jouée.
+  Monophonique : jouer des notes isolées. Placé après l'ampli par défaut (harmonies plus nettes).
 
 ## Captures d'amplis et IR
 
@@ -33,6 +50,8 @@ SUB et FREQ SHIFT se placent avant ou après l'ampli (bouton sur leur carte), sa
 Une capture WaveNet « standard » est le module le plus lourd. Mesure sur un cœur de
 processeur serveur à 2,1 GHz, blocs de 64 échantillons : environ 16 à 23 % d'un cœur
 (A2 : ~6 %, LSTM : < 1 %). Un processeur de bureau récent fait nettement mieux.
+WHAMMY et HARMONIZER restent légers : moins de 2 % d'un cœur chacun à 48 kHz, dans le pire
+cas (±2 octaves, deux voix).
 Pour mesurer sur ta machine : `build/tests/SubdAmpBenchmark` (accepte tes propres `.nam`).
 
 Sur x86, le moteur NAM est compilé avec AVX2/FMA (≈ 30 % de CPU en moins). Pour un
@@ -80,10 +99,11 @@ Sur macOS, ajouter `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` pour un binaire un
 ## Structure
 
 ```
-dsp/          C++ pur, sans JUCE, testable unitairement : modules (gate, SUB, FREQ SHIFT,
-              ampli NAM, égaliseur), rééchantillonnage, échange temps réel des captures
+dsp/          C++ pur, sans JUCE, testable unitairement : modules (gate, SUB, WHAMMY,
+              HARMONIZER, FREQ SHIFT, ampli NAM, égaliseur), détection de hauteur,
+              rééchantillonnage, échange temps réel des captures
 plugin/       AudioProcessor, paramètres, chaîne, cab (convolution JUCE), presets
-gui/          interface du plugin (cartes de modules, sélecteurs de fichiers)
+gui/          interface du plugin (pédalier, panneaux de modules, sélecteurs de fichiers)
 standalone/   application standalone : carte son, canal guitare, réglages
 third_party/  compilation de NeuralAmpModelerCore
 tests/        dsp/ (unitaires), realtime/ (aucune allocation dans l'audio),

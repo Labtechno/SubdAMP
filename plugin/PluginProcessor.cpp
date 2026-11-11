@@ -112,9 +112,28 @@ SubdAmpProcessor::SubdAmpProcessor()
           rawParameter (parameters, params::id::fsPosition),
           rawParameter (parameters, params::id::fsShift),
           rawParameter (parameters, params::id::fsMix),
-          rawParameter (parameters, params::id::fsFeedback) },
+          rawParameter (parameters, params::id::fsFeedback),
+          rawParameter (parameters, params::id::whEnabled),
+          rawParameter (parameters, params::id::whPosition),
+          rawParameter (parameters, params::id::whInterval),
+          rawParameter (parameters, params::id::whMode),
+          rawParameter (parameters, params::id::whGlide),
+          rawParameter (parameters, params::id::whSensitivity),
+          rawParameter (parameters, params::id::whMix),
+          rawParameter (parameters, params::id::hmEnabled),
+          rawParameter (parameters, params::id::hmPosition),
+          rawParameter (parameters, params::id::hmKey),
+          rawParameter (parameters, params::id::hmScale),
+          rawParameter (parameters, params::id::hmVoice1),
+          rawParameter (parameters, params::id::hmLevel1),
+          rawParameter (parameters, params::id::hmVoice2),
+          rawParameter (parameters, params::id::hmLevel2),
+          rawParameter (parameters, params::id::hmFormant),
+          rawParameter (parameters, params::id::hmDirect) },
       bypassParameter (boolParameter (parameters, params::id::bypass)),
       movableModules { MovableModule { subSlot, raw.subEnabled, raw.subPosition, positionOf (raw.subPosition) },
+                       MovableModule { whammySlot, raw.whEnabled, raw.whPosition, positionOf (raw.whPosition) },
+                       MovableModule { harmonizerSlot, raw.hmEnabled, raw.hmPosition, positionOf (raw.hmPosition) },
                        MovableModule { shifterSlot, raw.fsEnabled, raw.fsPosition, positionOf (raw.fsPosition) } }
 {
     // Ramasse-miettes des captures remplacées et suivi de la latence, sur le thread de l'interface.
@@ -136,11 +155,12 @@ void SubdAmpProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     outputGain.prepare (spec);
     bypass.prepare (spec);
 
-    for (auto* slot : { &gateSlot, &subSlot, &shifterSlot, &ampSlot, &cabSlot })
+    for (auto* slot : allSlots)
         slot->prepare (spec);
 
     dryBuffer.setSize (1, maximumExpectedSamplesPerBlock, false, true, false);
     preparedBlockSize = maximumExpectedSamplesPerBlock;
+    preparedSampleRate.store (sampleRate, std::memory_order_relaxed);
 
     for (auto& module : movableModules)
         module.activePosition = positionOf (module.position);
@@ -164,7 +184,7 @@ void SubdAmpProcessor::reset()
     outputGain.reset();
     bypass.reset();
 
-    for (auto* slot : { &gateSlot, &subSlot, &shifterSlot, &ampSlot, &cabSlot })
+    for (auto* slot : allSlots)
         slot->reset();
 }
 
@@ -274,6 +294,21 @@ void SubdAmpProcessor::updateTargetsFromParameters() noexcept
     sub.setLevels (load (raw.subDry) * 0.01f, load (raw.subDown1) * 0.01f,
                    load (raw.subDown2) * 0.01f, load (raw.subUp) * 0.01f);
     sub.setToneFrequency (load (raw.subTone));
+
+    whammy.setInterval (load (raw.whInterval));
+    whammy.setMode (static_cast<dsp::Whammy::Mode> (juce::roundToInt (load (raw.whMode))));
+    whammy.setGlideMilliseconds (load (raw.whGlide));
+    whammy.setSensitivity (load (raw.whSensitivity) * 0.01f);
+    whammy.setMix (load (raw.whMix) * 0.01f);
+
+    harmonizer.setKey (juce::roundToInt (load (raw.hmKey)));
+    harmonizer.setScale (static_cast<dsp::Scale> (juce::jlimit (0, dsp::numScales - 1, juce::roundToInt (load (raw.hmScale)))));
+    harmonizer.setVoiceInterval (0, params::harmonyVoiceSteps (juce::roundToInt (load (raw.hmVoice1))));
+    harmonizer.setVoiceInterval (1, params::harmonyVoiceSteps (juce::roundToInt (load (raw.hmVoice2))));
+    harmonizer.setVoiceLevel (0, load (raw.hmLevel1) * 0.01f);
+    harmonizer.setVoiceLevel (1, load (raw.hmLevel2) * 0.01f);
+    harmonizer.setFormantSemitones (load (raw.hmFormant));
+    harmonizer.setDirectLevel (load (raw.hmDirect) * 0.01f);
 
     shifter.setShiftHz (load (raw.fsShift));
     shifter.setMix (load (raw.fsMix) * 0.01f);
@@ -455,6 +490,66 @@ void SubdAmpProcessor::timerCallback()
 
     if (modelLatency != getLatencySamples())
         setLatencySamples (modelLatency);
+}
+
+//==============================================================================
+bool SubdAmpProcessor::isModuleEnabled (ModuleId module) const noexcept
+{
+    return isOn (*parameters.getRawParameterValue (infoFor (module).enabledParameter));
+}
+
+bool SubdAmpProcessor::isModuleAfterAmp (ModuleId module) const noexcept
+{
+    const auto* position = infoFor (module).positionParameter;
+    return position != nullptr && positionOf (*parameters.getRawParameterValue (position)) == params::Position::afterAmp;
+}
+
+double SubdAmpProcessor::getModuleLatencyMs (ModuleId module) const noexcept
+{
+    const auto sampleRate = preparedSampleRate.load (std::memory_order_relaxed);
+
+    if (sampleRate <= 0.0)
+        return 0.0;
+
+    switch (module)
+    {
+        case ModuleId::whammy:     return 1000.0 * whammy.getLatencySamples() / sampleRate;
+        case ModuleId::harmonizer: return 1000.0 * harmonizer.getLatencySamples() / sampleRate;
+        case ModuleId::amp:        return 1000.0 * amp.getModel().getLatencySamples() / sampleRate;
+        case ModuleId::gate:
+        case ModuleId::sub:
+        case ModuleId::cab:
+        case ModuleId::freqShift:  break;
+    }
+
+    return 0.0;
+}
+
+LatencyStatus SubdAmpProcessor::getLatencyStatus() const noexcept
+{
+    LatencyStatus status;
+
+    if (bypassParameter.get())
+        return status;
+
+    for (const auto& info : moduleInfos)
+    {
+        if (! isModuleEnabled (info.id))
+            continue;
+
+        // Le WHAMMY ne retarde le son que lorsqu'il transpose et qu'il est mélangé.
+        if (info.id == ModuleId::whammy
+            && (load (raw.whMix) < 1.0f
+                || (std::abs (load (raw.whInterval)) < dsp::Whammy::unisonFadeSemitones && juce::roundToInt (load (raw.whMode)) == 0)))
+            continue;
+
+        if (info.tier > status.tier)
+            status.tier = info.tier;
+
+        status.milliseconds += getModuleLatencyMs (info.id);
+    }
+
+    return status;
 }
 
 //==============================================================================

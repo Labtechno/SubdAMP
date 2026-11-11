@@ -4,13 +4,14 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
 namespace subdamp::gui
 {
 
-/** Interrupteur rond façon pédale : anneau éteint, disque ambre allumé. */
+/** Interrupteur rond façon LED de pédale : anneau éteint, disque ambre allumé. */
 class PowerButton final : public juce::Button
 {
 public:
@@ -20,9 +21,9 @@ public:
 };
 
 /**
-    Carte d'un module de la chaîne : titre, badge de latence, interrupteur, éventuel
-    sélecteur de position (avant / après l'ampli), potards, et un composant libre en bas
-    (sélecteur de fichier pour l'ampli et le cab).
+    Panneau des réglages d'un module, affiché en grand sous le pédalier : titre, description,
+    badge de latence, interrupteur, éventuel sélecteur de position (avant / après l'ampli),
+    potards et listes déroulantes, et un composant libre (sélecteur de fichier de l'ampli et du cab).
 
     Tout est relié aux paramètres par des attachements JUCE : l'automation du DAW et
     l'interface restent synchronisées sans code supplémentaire.
@@ -39,33 +40,39 @@ public:
     ~ModuleCard() override;
 
     void addKnob (const char* parameterId, const juce::String& label);
-    void setKnobColumns (int columns) { knobColumns = columns; }
+    void addChoice (const char* parameterId, const juce::String& label, int baseWidth = 170);
 
-    /** Composant affiché sous les potards (non possédé), avec sa hauteur à l'échelle 1. */
-    void setFooter (juce::Component* component, int baseHeight);
+    void setDescription (const juce::String& text) { description = text; repaint(); }
 
-    /** Largeur de la carte à l'échelle 1, pour la mise en page de la chaîne. */
-    int getBaseWidth() const noexcept { return baseWidth; }
-    void setBaseWidth (int width) noexcept { baseWidth = width; }
+    /** Composant affiché à droite des réglages (non possédé), avec sa taille à l'échelle 1. */
+    void setFooter (juce::Component* component, int baseWidth, int baseHeight);
+
+    /** Texte ajouté au badge de latence (« · 15 ms »), relu par refreshLatency(). */
+    void setLatencyText (std::function<juce::String()> provider) { latencyText = std::move (provider); }
+    void refreshLatency();
 
     void setScale (float newScale);
 
     void paint (juce::Graphics& g) override;
-    void paintOverChildren (juce::Graphics& g) override;
     void resized() override;
 
 private:
-    struct Knob
+    struct Control
     {
-        juce::Slider slider;
         juce::Label label;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+        std::unique_ptr<juce::Slider> slider;
+        std::unique_ptr<juce::ComboBox> combo;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sliderAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> comboAttachment;
+        int baseWidth = 100;
     };
 
+    Control& addControl (const juce::String& label, int baseWidth);
     void updatePositionText();
+    void updateEnabledLook();
 
     juce::AudioProcessorValueTreeState& parameters;
-    juce::String title;
+    juce::String title, description;
     dsp::LatencyTier tier;
 
     PowerButton powerButton;
@@ -74,13 +81,14 @@ private:
     juce::TextButton positionButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> positionAttachment;
 
-    std::vector<std::unique_ptr<Knob>> knobs;
-    int knobColumns = 3;
+    std::vector<std::unique_ptr<Control>> controls;
 
     juce::Component* footer = nullptr;
-    int footerBaseHeight = 0;
+    int footerBaseWidth = 0, footerBaseHeight = 0;
 
-    int baseWidth = 200;
+    std::function<juce::String()> latencyText;
+    juce::String shownLatency;
+
     float scale = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ModuleCard)

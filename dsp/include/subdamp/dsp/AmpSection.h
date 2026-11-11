@@ -21,6 +21,7 @@ public:
     void setLevelDecibels (float decibels) noexcept        { level.setGainDecibels (decibels); }
 
     AmpModel& getModel() noexcept { return model; }
+    const AmpModel& getModel() const noexcept { return model; }
 
 private:
     GainStage drive;

@@ -12,9 +12,11 @@ add_executable(SubdAmpDspTests
     dsp/DecibelsTests.cpp
     dsp/FilterTests.cpp
     dsp/GainStageTests.cpp
+    dsp/HarmonizerTests.cpp
     dsp/LinearSmootherTests.cpp
     dsp/ModuleTests.cpp
-    dsp/ResamplingTests.cpp)
+    dsp/ResamplingTests.cpp
+    dsp/WhammyTests.cpp)
 
 target_link_libraries(SubdAmpDspTests PRIVATE subdamp_dsp Catch2::Catch2WithMain)
 target_compile_definitions(SubdAmpDspTests PRIVATE SUBDAMP_NAM_EXAMPLE_MODELS="${SUBDAMP_NAM_EXAMPLE_MODELS}")

@@ -6,15 +6,21 @@ add_library(subdamp_dsp STATIC
     src/AmpSection.cpp
     src/Biquad.cpp
     src/BypassCrossfade.cpp
+    src/DelayLineShifter.cpp
     src/FractionalResampler.cpp
     src/FrequencyShifter.cpp
     src/GainStage.cpp
+    src/Harmonizer.cpp
     src/LinearSmoother.cpp
     src/NoiseGate.cpp
     src/OctaveDivider.cpp
+    src/OnsetDetector.cpp
+    src/PitchTracker.cpp
     src/RateBridge.cpp
+    src/ScaleHarmony.cpp
     src/SwitchableEffect.cpp
-    src/ToneStack.cpp)
+    src/ToneStack.cpp
+    src/Whammy.cpp)
 
 target_include_directories(subdamp_dsp PUBLIC include)
 target_compile_features(subdamp_dsp PUBLIC cxx_std_20)

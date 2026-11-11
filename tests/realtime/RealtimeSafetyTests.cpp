@@ -4,11 +4,13 @@
 
 #include "subdamp/dsp/AmpModel.h"
 #include "subdamp/dsp/FrequencyShifter.h"
+#include "subdamp/dsp/Harmonizer.h"
 #include "subdamp/dsp/NoiseGate.h"
 #include "subdamp/dsp/OctaveDivider.h"
 #include "subdamp/dsp/RateBridge.h"
 #include "subdamp/dsp/SwitchableEffect.h"
 #include "subdamp/dsp/ToneStack.h"
+#include "subdamp/dsp/Whammy.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -30,7 +32,7 @@ namespace
 
         for (int n = 0; n < numSamples; ++n)
             signal[static_cast<std::size_t> (n)] = 0.3f * std::sin (0.01f * static_cast<float> (n))
-                                                 + 0.1f * std::sin (0.037f * static_cast<float> (n));
+                                                 + 0.1f * std::sin (0.03f * static_cast<float> (n)); // 3e harmonique : signal périodique
 
         return signal;
     }
@@ -101,6 +103,32 @@ TEST_CASE ("Les modules LIVE n'allouent rien pendant le traitement", "[realtime]
         effect->prepare ({ 48000.0, blockSize });
         REQUIRE (allocationsWhileProcessing (*effect, 48000.0) == 0);
     }
+}
+
+TEST_CASE ("WHAMMY et HARMONIZER n'allouent rien, quel que soit le réglage", "[realtime]")
+{
+    const auto sampleRate = GENERATE (44100.0, 48000.0, 96000.0);
+
+    Whammy whammy;
+    whammy.prepare ({ sampleRate, blockSize });
+    whammy.setMode (Whammy::Mode::attackToInterval);
+    whammy.setInterval (-24.0f);
+    whammy.setMix (1.0f);
+    REQUIRE (allocationsWhileProcessing (whammy, sampleRate) == 0);
+
+    whammy.setMode (Whammy::Mode::fixed);
+    whammy.setInterval (24.0f);
+    REQUIRE (allocationsWhileProcessing (whammy, sampleRate) == 0);
+
+    Harmonizer harmonizer;
+    harmonizer.prepare ({ sampleRate, blockSize });
+    harmonizer.setVoiceInterval (0, 14);  // +2 octaves : le plus de grains simultanés
+    harmonizer.setVoiceInterval (1, -14);
+    harmonizer.setVoiceLevel (0, 1.0f);
+    harmonizer.setVoiceLevel (1, 1.0f);
+    harmonizer.setFormantSemitones (-12.0f); // grains les plus longs
+    REQUIRE (allocationsWhileProcessing (harmonizer, sampleRate) == 0);
+    REQUIRE (harmonizer.isTracking());
 }
 
 TEST_CASE ("Un module mis en marche puis arrêté n'alloue rien", "[realtime]")

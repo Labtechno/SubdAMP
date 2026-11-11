@@ -19,6 +19,61 @@ inline std::vector<float> sine (double frequency, double sampleRate, int numSamp
     return signal;
 }
 
+/** Dent de scie à bande limitée (harmoniques en 1/k jusqu'à 45 % de la fréquence d'échantillonnage). */
+inline std::vector<float> sawtooth (double frequency, double sampleRate, int numSamples, float amplitude = 0.3f)
+{
+    std::vector<float> signal (static_cast<std::size_t> (numSamples), 0.0f);
+    const auto harmonics = static_cast<int> (0.45 * sampleRate / frequency);
+
+    for (int k = 1; k <= harmonics; ++k)
+    {
+        const auto w = 2.0 * std::numbers::pi * frequency * k / sampleRate;
+        const auto a = amplitude * 0.6 / k;
+
+        for (int n = 0; n < numSamples; ++n)
+            signal[static_cast<std::size_t> (n)] += static_cast<float> (a * std::sin (w * n));
+    }
+
+    return signal;
+}
+
+/**
+    Corde pincée (Karplus-Strong) : un signal réaliste pour les détecteurs de hauteur, avec
+    attaque bruitée et harmoniques qui s'éteignent. Fréquence exacte : sampleRate / (delay + 0,5).
+*/
+inline std::vector<float> pluckedString (int delay, double sampleRate, int numSamples, float amplitude = 0.5f, unsigned seed = 1)
+{
+    std::vector<float> line (static_cast<std::size_t> (delay));
+    unsigned state = seed;
+
+    for (auto& s : line)
+    {
+        state = state * 1664525u + 1013904223u;
+        s = amplitude * (static_cast<float> (state >> 8) / static_cast<float> (1u << 24) * 2.0f - 1.0f);
+    }
+
+    std::vector<float> signal (static_cast<std::size_t> (numSamples));
+    std::size_t index = 0;
+    float previous = 0.0f;
+    const auto decay = static_cast<float> (std::pow (0.001, 1.0 / (3.0 * sampleRate / delay))); // -60 dB en ≈ 3 s
+
+    for (auto& out : signal)
+    {
+        const auto current = line[index];
+        out = current;
+        line[index] = decay * 0.5f * (current + previous);
+        previous = current;
+        index = (index + 1) % line.size();
+    }
+
+    return signal;
+}
+
+inline double pluckedStringFrequency (int delay, double sampleRate)
+{
+    return sampleRate / (delay + 0.5);
+}
+
 /** Amplitude de la composante à `frequency` (algorithme de Goertzel, fenêtre de Hann). */
 inline double magnitudeAt (std::span<const float> signal, double frequency, double sampleRate)
 {

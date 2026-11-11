@@ -51,6 +51,10 @@ public:
     {
         host.getDeviceManager().removeChangeListener (this);
         editor->removeComponentListener (this);
+
+        // Protocole JUCE : le processeur doit être prévenu avant la destruction de son interface.
+        host.getProcessor().editorBeingDeleted (editor.get());
+        editor = nullptr;
     }
 
     void paint (juce::Graphics& g) override

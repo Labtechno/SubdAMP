@@ -1,14 +1,17 @@
 #pragma once
 
 #include "plugin/CabSection.h"
+#include "plugin/Modules.h"
 #include "plugin/Parameters.h"
 #include "subdamp/dsp/AmpSection.h"
 #include "subdamp/dsp/BypassCrossfade.h"
 #include "subdamp/dsp/FrequencyShifter.h"
 #include "subdamp/dsp/GainStage.h"
+#include "subdamp/dsp/Harmonizer.h"
 #include "subdamp/dsp/NoiseGate.h"
 #include "subdamp/dsp/OctaveDivider.h"
 #include "subdamp/dsp/SwitchableEffect.h"
+#include "subdamp/dsp/Whammy.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -41,12 +44,19 @@ struct FileSlotStatus
     bool hasError = false;
 };
 
+/** Latence perçue (thread de l'interface). */
+struct LatencyStatus
+{
+    dsp::LatencyTier tier = dsp::LatencyTier::live;
+    double milliseconds = 0.0;
+};
+
 /**
     Processeur principal de SubdAmp.
 
     Chaîne mono : entrée → gate → [slot PRE] → ampli → cab → [slot POST] → sortie, puis
-    recopie en stéréo. Les modules de pitch (SUB, FREQ SHIFT) se placent dans le slot PRE
-    ou POST selon leur paramètre de position. Les entrées stéréo sont acceptées pour les DAW
+    recopie en stéréo. Les modules de pitch (SUB, WHAMMY, HARMONIZER, FREQ SHIFT) se placent
+    dans le slot PRE ou POST selon leur paramètre de position. Les entrées stéréo sont acceptées pour les DAW
     qui n'ont que des pistes stéréo : seul le canal gauche est alors utilisé.
 */
 class SubdAmpProcessor final : public juce::AudioProcessor,
@@ -105,6 +115,20 @@ public:
     /** Prévient l'interface quand l'état d'un fichier change. */
     juce::ChangeBroadcaster& getFileStatusBroadcaster() noexcept { return fileStatusBroadcaster; }
 
+    //==============================================================================
+    // État pour l'interface (thread de l'interface)
+    bool isModuleEnabled (ModuleId module) const noexcept;
+    bool isModuleAfterAmp (ModuleId module) const noexcept;
+
+    /** Retard propre à un module, en millisecondes. */
+    double getModuleLatencyMs (ModuleId module) const noexcept;
+
+    /** Latence du son entendu : catégorie la plus lente parmi les modules actifs, et retard total. */
+    LatencyStatus getLatencyStatus() const noexcept;
+
+    /** Module ouvert dans l'interface (conservé quand on ferme et rouvre la fenêtre). */
+    ModuleId openModule = ModuleId::amp;
+
 private:
     juce::AudioProcessorEditor* createEditor() override;
 
@@ -145,6 +169,23 @@ private:
         std::atomic<float>& fsShift;
         std::atomic<float>& fsMix;
         std::atomic<float>& fsFeedback;
+        std::atomic<float>& whEnabled;
+        std::atomic<float>& whPosition;
+        std::atomic<float>& whInterval;
+        std::atomic<float>& whMode;
+        std::atomic<float>& whGlide;
+        std::atomic<float>& whSensitivity;
+        std::atomic<float>& whMix;
+        std::atomic<float>& hmEnabled;
+        std::atomic<float>& hmPosition;
+        std::atomic<float>& hmKey;
+        std::atomic<float>& hmScale;
+        std::atomic<float>& hmVoice1;
+        std::atomic<float>& hmLevel1;
+        std::atomic<float>& hmVoice2;
+        std::atomic<float>& hmLevel2;
+        std::atomic<float>& hmFormant;
+        std::atomic<float>& hmDirect;
     };
 
     Parameters raw;
@@ -157,11 +198,17 @@ private:
 
     dsp::NoiseGate gate;
     dsp::OctaveDivider sub;
+    dsp::Whammy whammy;
+    dsp::Harmonizer harmonizer;
     dsp::FrequencyShifter shifter;
     dsp::AmpSection amp;
     CabSection cab;
 
-    dsp::SwitchableEffect gateSlot { gate }, subSlot { sub }, shifterSlot { shifter }, ampSlot { amp }, cabSlot { cab };
+    dsp::SwitchableEffect gateSlot { gate }, subSlot { sub }, whammySlot { whammy }, harmonizerSlot { harmonizer },
+                          shifterSlot { shifter }, ampSlot { amp }, cabSlot { cab };
+
+    std::array<dsp::SwitchableEffect*, 7> allSlots { &gateSlot, &subSlot, &whammySlot, &harmonizerSlot,
+                                                     &shifterSlot, &ampSlot, &cabSlot };
 
     /** Module de pitch déplaçable avant ou après l'ampli. */
     struct MovableModule
@@ -172,11 +219,12 @@ private:
         params::Position activePosition;
     };
 
-    // Ordre de traitement à l'intérieur d'un même slot : SUB puis FREQ SHIFT.
-    std::array<MovableModule, 2> movableModules;
+    // Ordre de traitement à l'intérieur d'un même slot : celui de movableOrder (Modules.h).
+    std::array<MovableModule, 4> movableModules;
 
     juce::AudioBuffer<float> dryBuffer; // copie du signal d'entrée, pour le bypass
     int preparedBlockSize = 0;
+    std::atomic<double> preparedSampleRate { 0.0 }; // lu par l'interface pour convertir les latences
 
     LevelMeters meters;
 
