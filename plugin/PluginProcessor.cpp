@@ -130,11 +130,50 @@ SubdAmpProcessor::SubdAmpProcessor()
           rawParameter (parameters, params::id::hmLevel2),
           rawParameter (parameters, params::id::hmFormant),
           rawParameter (parameters, params::id::hmDirect) },
+      textureRaw {
+          rawParameter (parameters, params::id::shEnabled),
+          rawParameter (parameters, params::id::shSource),
+          rawParameter (parameters, params::id::shInterval),
+          rawParameter (parameters, params::id::shDecay),
+          rawParameter (parameters, params::id::shAmount),
+          rawParameter (parameters, params::id::shTone),
+          rawParameter (parameters, params::id::shLevel),
+          rawParameter (parameters, params::id::poEnabled),
+          rawParameter (parameters, params::id::poSource),
+          rawParameter (parameters, params::id::poInterval1),
+          rawParameter (parameters, params::id::poLevel1),
+          rawParameter (parameters, params::id::poInterval2),
+          rawParameter (parameters, params::id::poLevel2),
+          rawParameter (parameters, params::id::poFormant),
+          rawParameter (parameters, params::id::poWidth),
+          rawParameter (parameters, params::id::frEnabled),
+          rawParameter (parameters, params::id::frSource),
+          rawParameter (parameters, params::id::frHold),
+          rawParameter (parameters, params::id::frAttack),
+          rawParameter (parameters, params::id::frRelease),
+          rawParameter (parameters, params::id::frTone),
+          rawParameter (parameters, params::id::frLevel),
+          rawParameter (parameters, params::id::grEnabled),
+          rawParameter (parameters, params::id::grSource),
+          rawParameter (parameters, params::id::grMode),
+          rawParameter (parameters, params::id::grSize),
+          rawParameter (parameters, params::id::grDensity),
+          rawParameter (parameters, params::id::grPitch),
+          rawParameter (parameters, params::id::grSpread),
+          rawParameter (parameters, params::id::grReverse),
+          rawParameter (parameters, params::id::grDivision),
+          rawParameter (parameters, params::id::grRepeats),
+          rawParameter (parameters, params::id::grLevel),
+          rawParameter (parameters, params::id::tempo) },
       bypassParameter (boolParameter (parameters, params::id::bypass)),
       movableModules { MovableModule { subSlot, raw.subEnabled, raw.subPosition, positionOf (raw.subPosition) },
                        MovableModule { whammySlot, raw.whEnabled, raw.whPosition, positionOf (raw.whPosition) },
                        MovableModule { harmonizerSlot, raw.hmEnabled, raw.hmPosition, positionOf (raw.hmPosition) },
-                       MovableModule { shifterSlot, raw.fsEnabled, raw.fsPosition, positionOf (raw.fsPosition) } }
+                       MovableModule { shifterSlot, raw.fsEnabled, raw.fsPosition, positionOf (raw.fsPosition) } },
+      textureRoutes { TextureRoute { shimmerSlot, textureRaw.shSource },
+                      TextureRoute { polySlot, textureRaw.poSource },
+                      TextureRoute { freezeSlot, textureRaw.frSource },
+                      TextureRoute { granularSlot, textureRaw.grSource } }
 {
     // Ramasse-miettes des captures remplacées et suivi de la latence, sur le thread de l'interface.
     startTimerHz (4);
@@ -158,7 +197,13 @@ void SubdAmpProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     for (auto* slot : allSlots)
         slot->prepare (spec);
 
+    for (auto& route : textureRoutes)
+        route.slot.prepare (spec);
+
     dryBuffer.setSize (1, maximumExpectedSamplesPerBlock, false, true, false);
+    preAmpTap.setSize (1, maximumExpectedSamplesPerBlock, false, true, false);
+    endTap.setSize (1, maximumExpectedSamplesPerBlock, false, true, false);
+    monoRight.setSize (1, maximumExpectedSamplesPerBlock, false, true, false);
     preparedBlockSize = maximumExpectedSamplesPerBlock;
     preparedSampleRate.store (sampleRate, std::memory_order_relaxed);
 
@@ -186,6 +231,9 @@ void SubdAmpProcessor::reset()
 
     for (auto* slot : allSlots)
         slot->reset();
+
+    for (auto& route : textureRoutes)
+        route.slot.reset();
 }
 
 bool SubdAmpProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -227,51 +275,109 @@ void SubdAmpProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         buffer.clear (0, 0, numSamples);
 
     updateTargetsFromParameters();
+    updateTransport();
+
+    // Le signal guitare (canal 0) devient la sortie gauche ; la droite est calculée à part.
+    // Sortie mono : les deux sont ensuite réunies.
+    const auto stereoOut = getTotalNumOutputChannels() > 1 && buffer.getNumChannels() > 1;
+    auto* left = buffer.getWritePointer (0);
+    auto* right = stereoOut ? buffer.getWritePointer (1) : nullptr;
+    const auto beatsPerSample = currentTempo / 60.0 / preparedSampleRate.load (std::memory_order_relaxed);
 
     // Certains hôtes envoient parfois plus d'échantillons qu'annoncé dans prepareToPlay :
     // on découpe pour ne jamais dépasser la taille des tampons préalloués.
-    auto* mono = buffer.getWritePointer (0);
-
     for (int start = 0; start < numSamples; start += preparedBlockSize)
-        processMonoChunk (mono + start, std::min (preparedBlockSize, numSamples - start));
+    {
+        const auto chunk = std::min (preparedBlockSize, numSamples - start);
+        auto* chunkRight = right != nullptr ? right + start : monoRight.getWritePointer (0);
 
-    for (int channel = 1; channel < getTotalNumOutputChannels(); ++channel)
-        buffer.copyFrom (channel, 0, buffer, 0, 0, numSamples);
+        granular.setTransportPosition (blockStartBeats.has_value()
+                                           ? std::optional<double> (*blockStartBeats + start * beatsPerSample)
+                                           : std::nullopt);
+
+        processChunk (left + start, chunkRight, chunk);
+
+        if (right == nullptr)
+            for (int i = 0; i < chunk; ++i)
+                left[start + i] = 0.5f * (left[start + i] + chunkRight[i]);
+    }
+
+    for (int channel = 2; channel < buffer.getNumChannels(); ++channel)
+        buffer.clear (channel, 0, numSamples);
 }
 
-void SubdAmpProcessor::processMonoChunk (float* samples, int numSamples) noexcept
+void SubdAmpProcessor::processChunk (float* leftSamples, float* rightSamples, int numSamples) noexcept
 {
     const auto size = static_cast<std::size_t> (numSamples);
-    const std::span<float> block { samples, size };
+    const std::span<float> left { leftSamples, size };
+    const std::span<float> right { rightSamples, size };
     const std::span<float> dry { dryBuffer.getWritePointer (0), size };
 
-    publishPeak (meters.inputPeak, dsp::blockPeak (block));
+    publishPeak (meters.inputPeak, dsp::blockPeak (left));
 
-    std::copy (block.begin(), block.end(), dry.begin());
+    std::copy (left.begin(), left.end(), dry.begin());
 
     // Bypass complètement engagé : rien à calculer, le fondu recopie le signal sec.
     if (! bypass.isFullyBypassed())
     {
-        inputGain.process (block);
-        gateSlot.process (block);
+        // Chaîne principale (mono)
+        inputGain.process (left);
+        gateSlot.process (left);
 
         for (auto& module : movableModules)
             if (module.activePosition == params::Position::beforeAmp)
-                module.slot.process (block);
+                module.slot.process (left);
 
-        ampSlot.process (block);
-        cabSlot.process (block);
+        const std::span<float> preAmp { preAmpTap.getWritePointer (0), size };
+        std::copy (left.begin(), left.end(), preAmp.begin());
+
+        ampSlot.process (left);
+        cabSlot.process (left);
 
         for (auto& module : movableModules)
             if (module.activePosition == params::Position::afterAmp)
-                module.slot.process (block);
+                module.slot.process (left);
 
-        outputGain.process (block);
+        const std::span<float> end { endTap.getWritePointer (0), size };
+        std::copy (left.begin(), left.end(), end.begin());
+        std::copy (left.begin(), left.end(), right.begin());
+
+        // Bus de textures : chacune écoute sa prise et s'ajoute en stéréo au son principal.
+        for (auto& route : textureRoutes)
+        {
+            const auto fromPreAmp = route.source.load (std::memory_order_relaxed) < 0.5f;
+            route.slot.process (fromPreAmp ? std::span<const float> { preAmp } : std::span<const float> { end }, left, right);
+        }
+
+        outputGain.processStereo (left, right);
     }
 
-    bypass.process (dry, block);
+    bypass.processStereo (dry, left, right);
 
-    publishPeak (meters.outputPeak, dsp::blockPeak (block));
+    publishPeak (meters.outputPeak, std::max (dsp::blockPeak (left), dsp::blockPeak (right)));
+}
+
+void SubdAmpProcessor::updateTransport() noexcept
+{
+    // Tempo et position du DAW s'il en fournit ; sinon (standalone), le tempo réglé.
+    currentTempo = load (textureRaw.tempo);
+    blockStartBeats.reset();
+
+    if (auto* host = getPlayHead())
+    {
+        if (const auto position = host->getPosition())
+        {
+            if (const auto bpm = position->getBpm(); bpm.hasValue() && *bpm > 0.0)
+                currentTempo = *bpm;
+
+            if (position->getIsPlaying())
+                if (const auto beats = position->getPpqPosition(); beats.hasValue())
+                    blockStartBeats = *beats;
+        }
+    }
+
+    granular.setTempo (currentTempo);
+    displayedTempo.store (currentTempo, std::memory_order_relaxed);
 }
 
 void SubdAmpProcessor::updateTargetsFromParameters() noexcept
@@ -309,6 +415,41 @@ void SubdAmpProcessor::updateTargetsFromParameters() noexcept
     harmonizer.setVoiceLevel (1, load (raw.hmLevel2) * 0.01f);
     harmonizer.setFormantSemitones (load (raw.hmFormant));
     harmonizer.setDirectLevel (load (raw.hmDirect) * 0.01f);
+
+    shimmer.setInterval (params::shimmerIntervalSemitones (juce::roundToInt (load (textureRaw.shInterval))));
+    shimmer.setDecaySeconds (load (textureRaw.shDecay));
+    shimmer.setShimmer (load (textureRaw.shAmount) * 0.01f);
+    shimmer.setToneHz (load (textureRaw.shTone));
+    shimmerSlot.setLevel (load (textureRaw.shLevel) * 0.01f);
+    shimmerSlot.setEnabled (isOn (textureRaw.shEnabled));
+
+    poly.setInterval (0, load (textureRaw.poInterval1));
+    poly.setInterval (1, load (textureRaw.poInterval2));
+    poly.setVoiceLevel (0, load (textureRaw.poLevel1) * 0.01f);
+    poly.setVoiceLevel (1, load (textureRaw.poLevel2) * 0.01f);
+    poly.setFormantSemitones (load (textureRaw.poFormant));
+    poly.setWidth (load (textureRaw.poWidth) * 0.01f);
+    polySlot.setLevel (1.0f); // niveaux réglés voix par voix
+    polySlot.setEnabled (isOn (textureRaw.poEnabled));
+
+    // Arrêter le module libère aussi la nappe : elle s'éteint avec son fondu de relâche.
+    freeze.setHold (isOn (textureRaw.frHold) && isOn (textureRaw.frEnabled));
+    freeze.setAttackMilliseconds (load (textureRaw.frAttack));
+    freeze.setReleaseMilliseconds (load (textureRaw.frRelease));
+    freeze.setToneHz (load (textureRaw.frTone));
+    freezeSlot.setLevel (load (textureRaw.frLevel) * 0.01f);
+    freezeSlot.setEnabled (isOn (textureRaw.frEnabled));
+
+    granular.setMode (load (textureRaw.grMode) > 0.5f ? dsp::GranularCloud::Mode::stutter : dsp::GranularCloud::Mode::cloud);
+    granular.setGrainMilliseconds (load (textureRaw.grSize));
+    granular.setDensity (load (textureRaw.grDensity));
+    granular.setPitchSemitones (load (textureRaw.grPitch));
+    granular.setSpread (load (textureRaw.grSpread) * 0.01f);
+    granular.setReverseProbability (load (textureRaw.grReverse) * 0.01f);
+    granular.setDivisionBeats (params::granularDivisionBeats (juce::roundToInt (load (textureRaw.grDivision))));
+    granular.setRepeats (juce::roundToInt (load (textureRaw.grRepeats)));
+    granularSlot.setLevel (load (textureRaw.grLevel) * 0.01f);
+    granularSlot.setEnabled (isOn (textureRaw.grEnabled));
 
     shifter.setShiftHz (load (raw.fsShift));
     shifter.setMix (load (raw.fsMix) * 0.01f);
@@ -516,10 +657,14 @@ double SubdAmpProcessor::getModuleLatencyMs (ModuleId module) const noexcept
         case ModuleId::whammy:     return 1000.0 * whammy.getLatencySamples() / sampleRate;
         case ModuleId::harmonizer: return 1000.0 * harmonizer.getLatencySamples() / sampleRate;
         case ModuleId::amp:        return 1000.0 * amp.getModel().getLatencySamples() / sampleRate;
+        case ModuleId::poly:       return 1000.0 * poly.latencySamples() / sampleRate;
         case ModuleId::gate:
         case ModuleId::sub:
         case ModuleId::cab:
-        case ModuleId::freqShift:  break;
+        case ModuleId::freqShift:
+        case ModuleId::shimmer:
+        case ModuleId::freeze:
+        case ModuleId::granular:   break;
     }
 
     return 0.0;
@@ -536,6 +681,14 @@ LatencyStatus SubdAmpProcessor::getLatencyStatus() const noexcept
     {
         if (! isModuleEnabled (info.id))
             continue;
+
+        // Les textures sont en parallèle : elles ne retardent pas le son principal.
+        if (info.isTexture)
+        {
+            status.texturesActive = true;
+            status.textureMilliseconds = std::max (status.textureMilliseconds, getModuleLatencyMs (info.id));
+            continue;
+        }
 
         // Le WHAMMY ne retarde le son que lorsqu'il transpose et qu'il est mélangé.
         if (info.id == ModuleId::whammy

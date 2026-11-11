@@ -3,7 +3,8 @@
 Plugin guitare (VST3 + application standalone) orienté pitch : octaver, whammy,
 harmonizer, frequency shifter, shimmer, textures. Usage personnel.
 
-**État : étape 3.** Chaîne `entrée → GATE → [avant l'ampli] → AMPLI → CAB → [après l'ampli] → sortie`.
+**État : étape 4.** Chaîne `entrée → GATE → [avant l'ampli] → AMPLI → CAB → [après l'ampli] → sortie`,
+plus un bus de 4 TEXTURES en parallèle, en stéréo.
 
 | Module | Rôle | Latence |
 |---|---|---|
@@ -14,13 +15,23 @@ harmonizer, frequency shifter, shimmer, textures. Usage personnel.
 | AMPLI | Capture Neural Amp Modeler (`.nam`) + gain, égaliseur 3 bandes, niveau | LIVE (0 à 48 kHz, < 1 ms sinon) |
 | CAB | Réponse impulsionnelle (`.wav`, `.aif`), ou cab interne par filtres | LIVE (0) |
 | FREQ SHIFT | Décaleur de fréquence (type Bode), mix, réinjection | LIVE (≈ 0) |
+| SHIMMER | Réverbe (réseau de 8 lignes) dont la queue est transposée en boucle : +octave, +octave et quinte… | TEXTURE |
+| POLY | Transposition polyphonique haute qualité (Signalsmith Stretch), 2 voix en stéréo, formants | TEXTURE (≈ 150 ms) |
+| FREEZE | Bouton FIGER : le son du moment est tenu en nappe infinie (gel spectral) ; attaque, relâche, tonalité | TEXTURE |
+| GRANULAR | Grains des 8 dernières secondes : nuage dispersé, ou stutter calé sur le tempo (grille du DAW en lecture) | TEXTURE |
 
 SUB, WHAMMY, HARMONIZER et FREQ SHIFT se placent avant ou après l'ampli (bouton sur leur
 panneau), sans clic. Dans un même emplacement, l'ordre est SUB → WHAMMY → HARMONIZER → FREQ SHIFT.
 
-**Interface** : pédalier en haut, dans l'ordre réel de la chaîne (clic sur une pédale pour
-ouvrir ses réglages, clic sur sa LED pour l'allumer). La couleur du haut de chaque pédale et
-le badge en haut à droite indiquent la latence : vert LIVE, orange JOUABLE, violet TEXTURE.
+**Textures** : elles tournent en parallèle et ne retardent jamais le son direct. Chacune écoute
+au choix le signal avant l'ampli (guitare claire) ou en fin de chaîne. Arrêtées, elles laissent
+finir leur queue (comme une pédale en mode « trails ») puis ne coûtent plus rien. Le tempo
+utilisé est celui du DAW ; en standalone, celui du potard TEMPO du GRANULAR.
+
+**Interface** : pédalier en haut, chaîne principale dans son ordre réel et textures en dessous
+(clic sur une pédale pour ouvrir ses réglages, clic sur sa LED pour l'allumer). La couleur du
+haut de chaque pédale et les badges en haut à droite indiquent la latence : vert LIVE, orange
+JOUABLE, violet TEXTURE (le badge violet n'apparaît que si une texture est allumée).
 
 ### Comment marchent les modules de pitch
 
@@ -50,8 +61,8 @@ le badge en haut à droite indiquent la latence : vert LIVE, orange JOUABLE, vio
 Une capture WaveNet « standard » est le module le plus lourd. Mesure sur un cœur de
 processeur serveur à 2,1 GHz, blocs de 64 échantillons : environ 16 à 23 % d'un cœur
 (A2 : ~6 %, LSTM : < 1 %). Un processeur de bureau récent fait nettement mieux.
-WHAMMY et HARMONIZER restent légers : moins de 2 % d'un cœur chacun à 48 kHz, dans le pire
-cas (±2 octaves, deux voix).
+Les modules de pitch et les textures restent légers : moins de 2 % d'un cœur chacun à
+48 kHz, dans le pire cas (±2 octaves, deux voix, nuage dense, boucle de shimmer au maximum).
 Pour mesurer sur ta machine : `build/tests/SubdAmpBenchmark` (accepte tes propres `.nam`).
 
 Sur x86, le moteur NAM est compilé avec AVX2/FMA (≈ 30 % de CPU en moins). Pour un
@@ -83,8 +94,8 @@ Viser un buffer de 64 ou 128 échantillons à 48 kHz.
 
 ## Compiler soi-même
 
-Prérequis : CMake ≥ 3.22, Git, et Visual Studio 2022 (Windows) ou Xcode (macOS).
-JUCE, NeuralAmpModelerCore, Eigen et Catch2 sont téléchargés automatiquement.
+Prérequis : CMake ≥ 3.25, Git, et Visual Studio 2022 (Windows) ou Xcode (macOS).
+JUCE, NeuralAmpModelerCore, Eigen, Signalsmith Stretch et Catch2 sont téléchargés automatiquement.
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -100,8 +111,9 @@ Sur macOS, ajouter `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` pour un binaire un
 
 ```
 dsp/          C++ pur, sans JUCE, testable unitairement : modules (gate, SUB, WHAMMY,
-              HARMONIZER, FREQ SHIFT, ampli NAM, égaliseur), détection de hauteur,
-              rééchantillonnage, échange temps réel des captures
+              HARMONIZER, FREQ SHIFT, ampli NAM, égaliseur), textures (SHIMMER, POLY,
+              FREEZE, GRANULAR), détection de hauteur, FFT, rééchantillonnage,
+              échange temps réel des captures
 plugin/       AudioProcessor, paramètres, chaîne, cab (convolution JUCE), presets
 gui/          interface du plugin (pédalier, panneaux de modules, sélecteurs de fichiers)
 standalone/   application standalone : carte son, canal guitare, réglages
@@ -135,5 +147,6 @@ les allocations : toute allocation dans le traitement audio fait échouer les te
 | ASIO SDK (fourni avec JUCE, Windows) | Licence Steinberg ou GPLv3 | Aucune contrainte en usage perso. |
 | NeuralAmpModelerCore | MIT | Aucune contrainte. |
 | Eigen (utilisé par NAM) | MPL 2.0 | Aucune contrainte tant que ses fichiers ne sont pas modifiés. |
+| Signalsmith Stretch + Signalsmith Linear | MIT | Aucune contrainte. |
 | Catch2 (tests seulement) | BSL-1.0 | Aucune contrainte. |
 | pluginval (CI seulement, non lié) | GPLv3 | Outil de test, n'entre pas dans le plugin. |

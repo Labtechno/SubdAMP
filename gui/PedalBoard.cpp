@@ -61,7 +61,7 @@ public:
         // Nom
         g.setColour (isOn ? theme::text : theme::textDim);
         g.setFont (juce::FontOptions (14.0f * scale, juce::Font::bold));
-        g.drawText (info.pedalName, body.withTrimmedTop (16.0f * scale).withHeight (28.0f * scale), juce::Justification::centred);
+        g.drawText (info.pedalName, body.withTrimmedTop (12.0f * scale).withHeight (26.0f * scale), juce::Justification::centred);
 
         // Vis de façade, pour l'esprit « boîtier »
         g.setColour (theme::background.withAlpha (0.7f));
@@ -72,8 +72,8 @@ public:
 
     void resized() override
     {
-        const auto size = juce::roundToInt (30.0f * scale);
-        led.setBounds (getLocalBounds().withSizeKeepingCentre (size, size).withY (getHeight() - size - juce::roundToInt (22.0f * scale)));
+        const auto size = juce::roundToInt (28.0f * scale);
+        led.setBounds (getLocalBounds().withSizeKeepingCentre (size, size).withY (getHeight() - size - juce::roundToInt (18.0f * scale)));
     }
 
     void mouseUp (const juce::MouseEvent& event) override
@@ -142,24 +142,42 @@ void PedalBoard::paint (juce::Graphics& g)
     if (order.empty())
         return;
 
-    // Câble entre les pédales, avec un chevron dans chaque intervalle.
-    const auto y = static_cast<float> (getHeight()) * 0.5f;
-    g.setColour (theme::panelOutline.brighter (0.2f));
-    g.drawLine (0.0f, y, static_cast<float> (getWidth()), y, 2.0f * scale);
-
-    for (std::size_t i = 1; i < order.size(); ++i)
+    const auto drawChevron = [&] (float x, float y)
     {
-        const auto left = pedalFor (order[i - 1]).getRight();
-        const auto right = pedalFor (order[i]).getX();
-        const auto x = (static_cast<float> (left) + static_cast<float> (right)) * 0.5f;
-
         juce::Path chevron;
         chevron.startNewSubPath (x - 3.0f * scale, y - 5.0f * scale);
         chevron.lineTo (x + 3.0f * scale, y);
         chevron.lineTo (x - 3.0f * scale, y + 5.0f * scale);
         g.setColour (theme::accent.withAlpha (0.8f));
         g.strokePath (chevron, juce::PathStrokeType (2.0f * scale, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
-    }
+    };
+
+    // Rangée principale : câble d'un bout à l'autre, chevron entre deux pédales.
+    const auto mainY = static_cast<float> (pedalFor (order.front()).getBounds().getCentreY());
+    const auto cable = theme::panelOutline.brighter (0.2f);
+    g.setColour (cable);
+    g.drawLine (0.0f, mainY, static_cast<float> (getWidth()), mainY, 2.0f * scale);
+
+    for (std::size_t i = 1; i < order.size(); ++i)
+        drawChevron ((static_cast<float> (pedalFor (order[i - 1]).getRight()) + static_cast<float> (pedalFor (order[i]).getX())) * 0.5f, mainY);
+
+    // Rangée des textures : branchée en parallèle, du début à la fin de la chaîne.
+    const auto& first = pedalFor (textureOrder.front());
+    const auto& last = pedalFor (textureOrder.back());
+    const auto textureY = static_cast<float> (first.getBounds().getCentreY());
+    const auto branchLeft = static_cast<float> (first.getX()) - 0.5f * gap * scale;
+    const auto branchRight = static_cast<float> (last.getRight()) + 0.5f * gap * scale;
+
+    g.setColour (theme::latencyTexture.withAlpha (0.5f));
+    g.drawLine (branchLeft, mainY, branchLeft, textureY, 2.0f * scale);
+    g.drawLine (branchRight, mainY, branchRight, textureY, 2.0f * scale);
+    g.drawLine (branchLeft, textureY, branchRight, textureY, 2.0f * scale);
+
+    g.setColour (theme::latencyTexture);
+    g.setFont (juce::FontOptions (12.0f * scale, juce::Font::bold));
+    g.drawFittedText (juce::String::fromUTF8 ("TEXTURES\nen parallèle"),
+                      juce::Rectangle<float> (0.0f, textureY - 20.0f * scale, branchLeft - 10.0f * scale, 40.0f * scale).toNearestInt(),
+                      juce::Justification::centredRight, 2);
 }
 
 void PedalBoard::resized()
@@ -167,17 +185,24 @@ void PedalBoard::resized()
     const auto width = juce::roundToInt (pedalWidth * scale);
     const auto height = juce::roundToInt (pedalHeight * scale);
     const auto spacing = juce::roundToInt (gap * scale);
-    const auto count = static_cast<int> (order.size());
-    const auto total = count * width + juce::jmax (0, count - 1) * spacing;
+    const auto rowSpacing = juce::roundToInt (rowGap * scale);
 
-    auto x = juce::jmax (0, (getWidth() - total) / 2);
-    const auto y = (getHeight() - height) / 2;
-
-    for (const auto module : order)
+    const auto layoutRow = [&] (const auto& modules, int y)
     {
-        pedalFor (module).setBounds (x, y, width, height);
-        x += width + spacing;
-    }
+        const auto count = static_cast<int> (modules.size());
+        const auto total = count * width + juce::jmax (0, count - 1) * spacing;
+        auto x = juce::jmax (0, (getWidth() - total) / 2);
+
+        for (const auto module : modules)
+        {
+            pedalFor (module).setBounds (x, y, width, height);
+            x += width + spacing;
+        }
+    };
+
+    const auto top = (getHeight() - 2 * height - rowSpacing) / 2;
+    layoutRow (order, top);
+    layoutRow (textureOrder, top + height + rowSpacing);
 }
 
 } // namespace subdamp::gui

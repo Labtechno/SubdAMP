@@ -43,7 +43,7 @@ private:
     void buildCards();
 
     static constexpr int baseWidth = 1200;
-    static constexpr int baseHeight = 560;
+    static constexpr int baseHeight = 660;
 
     SubdAmpProcessor& subdAmp;
     std::unique_ptr<LookAndFeel> lookAndFeel;

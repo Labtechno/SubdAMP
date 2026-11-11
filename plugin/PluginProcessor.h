@@ -11,12 +11,18 @@
 #include "subdamp/dsp/NoiseGate.h"
 #include "subdamp/dsp/OctaveDivider.h"
 #include "subdamp/dsp/SwitchableEffect.h"
+#include "subdamp/dsp/GranularCloud.h"
+#include "subdamp/dsp/PolyShifter.h"
+#include "subdamp/dsp/ShimmerReverb.h"
+#include "subdamp/dsp/SpectralFreeze.h"
+#include "subdamp/dsp/StereoTexture.h"
 #include "subdamp/dsp/Whammy.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <array>
 #include <atomic>
+#include <optional>
 
 namespace subdamp
 {
@@ -47,8 +53,15 @@ struct FileSlotStatus
 /** Latence perçue (thread de l'interface). */
 struct LatencyStatus
 {
+    // Son principal (LIVE ou JOUABLE)
     dsp::LatencyTier tier = dsp::LatencyTier::live;
     double milliseconds = 0.0;
+
+    // Bus de textures, en parallèle
+    bool texturesActive = false;
+    double textureMilliseconds = 0.0;
+
+    bool operator== (const LatencyStatus&) const = default;
 };
 
 /**
@@ -126,6 +139,9 @@ public:
     /** Latence du son entendu : catégorie la plus lente parmi les modules actifs, et retard total. */
     LatencyStatus getLatencyStatus() const noexcept;
 
+    /** Tempo utilisé par les textures (celui du DAW s'il en donne un, sinon le réglage). */
+    double getTempo() const noexcept { return displayedTempo.load (std::memory_order_relaxed); }
+
     /** Module ouvert dans l'interface (conservé quand on ferme et rouvre la fenêtre). */
     ModuleId openModule = ModuleId::amp;
 
@@ -135,7 +151,8 @@ private:
     void handleAsyncUpdate() override;
     void timerCallback() override;
 
-    void processMonoChunk (float* samples, int numSamples) noexcept;
+    void processChunk (float* left, float* right, int numSamples) noexcept;
+    void updateTransport() noexcept;
     void updateTargetsFromParameters() noexcept;
     void restoreFilesFromState();
     void setStatus (FileSlotStatus& slot, FileSlotStatus newStatus);
@@ -188,7 +205,47 @@ private:
         std::atomic<float>& hmDirect;
     };
 
+    /** Paramètres des textures, mis en cache de la même façon. */
+    struct TextureParameters
+    {
+        std::atomic<float>& shEnabled;
+        std::atomic<float>& shSource;
+        std::atomic<float>& shInterval;
+        std::atomic<float>& shDecay;
+        std::atomic<float>& shAmount;
+        std::atomic<float>& shTone;
+        std::atomic<float>& shLevel;
+        std::atomic<float>& poEnabled;
+        std::atomic<float>& poSource;
+        std::atomic<float>& poInterval1;
+        std::atomic<float>& poLevel1;
+        std::atomic<float>& poInterval2;
+        std::atomic<float>& poLevel2;
+        std::atomic<float>& poFormant;
+        std::atomic<float>& poWidth;
+        std::atomic<float>& frEnabled;
+        std::atomic<float>& frSource;
+        std::atomic<float>& frHold;
+        std::atomic<float>& frAttack;
+        std::atomic<float>& frRelease;
+        std::atomic<float>& frTone;
+        std::atomic<float>& frLevel;
+        std::atomic<float>& grEnabled;
+        std::atomic<float>& grSource;
+        std::atomic<float>& grMode;
+        std::atomic<float>& grSize;
+        std::atomic<float>& grDensity;
+        std::atomic<float>& grPitch;
+        std::atomic<float>& grSpread;
+        std::atomic<float>& grReverse;
+        std::atomic<float>& grDivision;
+        std::atomic<float>& grRepeats;
+        std::atomic<float>& grLevel;
+        std::atomic<float>& tempo;
+    };
+
     Parameters raw;
+    TextureParameters textureRaw;
     juce::AudioParameterBool& bypassParameter;
 
     //==============================================================================
@@ -221,6 +278,31 @@ private:
 
     // Ordre de traitement à l'intérieur d'un même slot : celui de movableOrder (Modules.h).
     std::array<MovableModule, 4> movableModules;
+
+    //==============================================================================
+    // Bus de textures (parallèle, stéréo)
+    dsp::ShimmerReverb shimmer;
+    dsp::PolyShifter poly;
+    dsp::SpectralFreeze freeze;
+    dsp::GranularCloud granular;
+
+    dsp::TextureSlot shimmerSlot { shimmer }, polySlot { poly }, freezeSlot { freeze }, granularSlot { granular };
+
+    /** Texture et la prise où elle écoute (avant l'ampli ou fin de chaîne). */
+    struct TextureRoute
+    {
+        dsp::TextureSlot& slot;
+        std::atomic<float>& source;
+    };
+
+    std::array<TextureRoute, 4> textureRoutes;
+
+    juce::AudioBuffer<float> preAmpTap, endTap, monoRight; // préalloués dans prepareToPlay
+
+    // Transport (thread audio) : tempo courant et position du DAW au début du bloc
+    double currentTempo = 120.0;
+    std::optional<double> blockStartBeats;
+    std::atomic<double> displayedTempo { 120.0 }; // pour l'interface
 
     juce::AudioBuffer<float> dryBuffer; // copie du signal d'entrée, pour le bypass
     int preparedBlockSize = 0;

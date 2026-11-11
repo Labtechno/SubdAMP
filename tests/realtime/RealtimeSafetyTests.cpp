@@ -4,10 +4,15 @@
 
 #include "subdamp/dsp/AmpModel.h"
 #include "subdamp/dsp/FrequencyShifter.h"
+#include "subdamp/dsp/GranularCloud.h"
 #include "subdamp/dsp/Harmonizer.h"
 #include "subdamp/dsp/NoiseGate.h"
 #include "subdamp/dsp/OctaveDivider.h"
+#include "subdamp/dsp/PolyShifter.h"
 #include "subdamp/dsp/RateBridge.h"
+#include "subdamp/dsp/ShimmerReverb.h"
+#include "subdamp/dsp/SpectralFreeze.h"
+#include "subdamp/dsp/StereoTexture.h"
 #include "subdamp/dsp/SwitchableEffect.h"
 #include "subdamp/dsp/ToneStack.h"
 #include "subdamp/dsp/Whammy.h"
@@ -15,6 +20,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <array>
 #include <cmath>
 #include <thread>
 #include <vector>
@@ -129,6 +135,59 @@ TEST_CASE ("WHAMMY et HARMONIZER n'allouent rien, quel que soit le réglage", "[
     harmonizer.setFormantSemitones (-12.0f); // grains les plus longs
     REQUIRE (allocationsWhileProcessing (harmonizer, sampleRate) == 0);
     REQUIRE (harmonizer.isTracking());
+}
+
+TEST_CASE ("Les textures n'allouent rien, y compris en marche / arrêt et changements de réglage", "[realtime]")
+{
+    const auto sampleRate = GENERATE (48000.0, 96000.0);
+
+    ShimmerReverb shimmer;
+    PolyShifter poly;
+    SpectralFreeze freeze;
+    GranularCloud granular;
+
+    shimmer.setShimmer (1.0f);
+    poly.setInterval (0, 12.0f);
+    poly.setInterval (1, -7.0f);
+    poly.setVoiceLevel (0, 1.0f);
+    poly.setFormantSemitones (-5.0f);
+    granular.setSpread (1.0f);
+    granular.setReverseProbability (0.5f);
+
+    std::array<TextureSlot, 4> slots { TextureSlot { shimmer }, TextureSlot { poly }, TextureSlot { freeze }, TextureSlot { granular } };
+
+    for (auto& slot : slots)
+    {
+        slot.prepare ({ sampleRate, blockSize });
+        slot.setLevel (1.0f);
+        slot.setEnabled (true);
+    }
+
+    auto signal = guitarLikeSignal (static_cast<int> (sampleRate) * 3);
+    std::vector<float> left (blockSize), right (blockSize);
+
+    // Premier passage hors mesure (réveil des textures).
+    for (auto& slot : slots)
+        slot.process (std::span<const float> { signal.data(), blockSize }, left, right);
+
+    ScopedAllocationCounter counter;
+
+    for (std::size_t start = blockSize, i = 0; start + blockSize <= signal.size(); start += blockSize, ++i)
+    {
+        // Réglages qui bougent pendant le jeu : gel / dégel, voix 2 allumée puis coupée,
+        // changement de mode du granulaire, texture arrêtée puis relancée.
+        freeze.setHold ((i / 200) % 2 == 1);
+        poly.setVoiceLevel (1, (i / 300) % 2 == 1 ? 1.0f : 0.0f);
+        poly.setInterval (0, (i / 250) % 2 == 1 ? 12.0f : 7.0f);
+        granular.setMode ((i / 400) % 2 == 1 ? GranularCloud::Mode::stutter : GranularCloud::Mode::cloud);
+        shimmer.setDecaySeconds ((i / 350) % 2 == 1 ? 12.0f : 3.0f);
+        slots[3].setEnabled ((i / 500) % 3 != 2);
+
+        for (auto& slot : slots)
+            slot.process (std::span<const float> { signal.data() + start, blockSize }, left, right);
+    }
+
+    REQUIRE (counter.count() == 0);
 }
 
 TEST_CASE ("Un module mis en marche puis arrêté n'alloue rien", "[realtime]")

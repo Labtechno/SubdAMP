@@ -2,7 +2,11 @@
 // réel (blocs de 64 échantillons). Usage : SubdAmpBenchmark [fichier.nam ...]
 
 #include "subdamp/dsp/AmpModel.h"
+#include "subdamp/dsp/GranularCloud.h"
 #include "subdamp/dsp/Harmonizer.h"
+#include "subdamp/dsp/PolyShifter.h"
+#include "subdamp/dsp/ShimmerReverb.h"
+#include "subdamp/dsp/SpectralFreeze.h"
 #include "subdamp/dsp/Whammy.h"
 
 #include <chrono>
@@ -76,6 +80,33 @@ double measureEffectLoadPercent (MonoEffect& effect, double sampleRate, int bloc
     return 100.0 * elapsed.count() / seconds;
 }
 
+/** Charge CPU d'une texture (entrée mono, sortie stéréo). */
+double measureTextureLoadPercent (StereoTexture& texture, double sampleRate, int blockSize)
+{
+    texture.prepare ({ sampleRate, blockSize });
+
+    constexpr double seconds = 10.0;
+    const auto numBlocks = static_cast<int> (sampleRate * seconds / blockSize);
+    std::vector<float> block (static_cast<std::size_t> (blockSize)), left (block.size()), right (block.size());
+    double phase = 0.0;
+
+    const auto start = std::chrono::steady_clock::now();
+
+    for (int b = 0; b < numBlocks; ++b)
+    {
+        for (auto& sample : block)
+        {
+            sample = 0.3f * static_cast<float> (std::sin (phase) + 0.5 * std::sin (2.0 * phase));
+            phase += 2.0 * 3.14159265358979 * 110.0 / sampleRate;
+        }
+
+        texture.process (block, left, right);
+    }
+
+    const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;
+    return 100.0 * elapsed.count() / seconds;
+}
+
 int main (int argc, char** argv)
 {
     std::vector<std::filesystem::path> files;
@@ -114,6 +145,28 @@ int main (int argc, char** argv)
         harmonizer.setFormantSemitones (-12.0f);
         std::printf ("  HARMONIZER 2 voix, %4.0f kHz : %5.1f %%\n", sampleRate / 1000.0, measureEffectLoadPercent (harmonizer, sampleRate, 64));
     }
+
+    std::printf ("\nTextures (pire cas), 48 kHz :\n");
+
+    ShimmerReverb shimmer;
+    shimmer.setShimmer (1.0f);
+    std::printf ("  SHIMMER : %5.1f %%\n", measureTextureLoadPercent (shimmer, 48000.0, 64));
+
+    PolyShifter poly;
+    poly.setInterval (0, 12.0f);
+    poly.setInterval (1, 7.0f);
+    poly.setVoiceLevel (0, 1.0f);
+    poly.setVoiceLevel (1, 1.0f);
+    std::printf ("  POLY 2 voix : %5.1f %%\n", measureTextureLoadPercent (poly, 48000.0, 64));
+
+    SpectralFreeze freeze;
+    freeze.setHold (true);
+    std::printf ("  FREEZE figé : %5.1f %%\n", measureTextureLoadPercent (freeze, 48000.0, 64));
+
+    GranularCloud granular;
+    granular.setDensity (60.0f);
+    granular.setGrainMilliseconds (500.0f);
+    std::printf ("  GRANULAR dense : %5.1f %%\n", measureTextureLoadPercent (granular, 48000.0, 64));
 
     return 0;
 }

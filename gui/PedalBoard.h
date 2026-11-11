@@ -13,9 +13,10 @@ namespace subdamp::gui
 {
 
 /**
-    Pédalier : une pédale par module, dans l'ordre réel de la chaîne. Clic sur une pédale :
-    ses réglages s'ouvrent en grand ; clic sur sa LED : marche / arrêt. La couleur du haut de
-    la pédale indique la catégorie de latence (vert LIVE, orange JOUABLE, violet TEXTURE).
+    Pédalier : une pédale par module. En haut, la chaîne principale dans son ordre réel ; en
+    dessous, les textures, branchées en parallèle. Clic sur une pédale : ses réglages s'ouvrent
+    en grand ; clic sur sa LED : marche / arrêt. La couleur du haut de la pédale indique la
+    catégorie de latence (vert LIVE, orange JOUABLE, violet TEXTURE).
 */
 class PedalBoard final : public juce::Component
 {
@@ -30,9 +31,10 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
-    static constexpr int pedalWidth = 104;
-    static constexpr int pedalHeight = 116;
+    static constexpr int pedalWidth = 100;
+    static constexpr int pedalHeight = 100;
     static constexpr int gap = 24;
+    static constexpr int rowGap = 22;
 
 private:
     class Pedal;

@@ -141,6 +141,15 @@ TEST_CASE ("Chaîne complète (tous les modules, ampli NAM, IR) sans aucune allo
     setParameter (*processor, params::id::hmEnabled, 1.0f);
     setParameter (*processor, params::id::hmVoice2, 12.0f); // +5te
 
+    // Les quatre textures, dont une sur la prise avant l'ampli, et le FREEZE figé.
+    setParameter (*processor, params::id::shEnabled, 1.0f);
+    setParameter (*processor, params::id::poEnabled, 1.0f);
+    setParameter (*processor, params::id::poLevel2, 50.0f);
+    setParameter (*processor, params::id::frEnabled, 1.0f);
+    setParameter (*processor, params::id::frHold, 1.0f);
+    setParameter (*processor, params::id::grEnabled, 1.0f);
+    setParameter (*processor, params::id::grSource, 0.0f);
+
     processor->loadAmpModel (exampleModels.getChildFile ("wavenet.nam"));
     processor->loadCabImpulseResponse (writeTestImpulseResponse (juce::File::getSpecialLocation (juce::File::tempDirectory)));
     waitForAmpModel (*processor);
@@ -216,6 +225,69 @@ TEST_CASE ("Les paramètres de l'HARMONIZER pilotent le module (Mi mineur, quint
     REQUIRE (processor->getLatencyStatus().tier == dsp::LatencyTier::playable);
     setParameter (*processor, params::id::hmEnabled, 0.0f);
     REQUIRE (processor->getLatencyStatus().tier == dsp::LatencyTier::live);
+}
+
+TEST_CASE ("Sans texture, la sortie est mono au centre ; une texture l'ouvre en stéréo", "[processor]")
+{
+    JuceEnvironment juce;
+    auto processor = createProcessor();
+    processor->prepareToPlay (48000.0, 64);
+
+    SignalRunner runner { *processor, 48000.0, 64 };
+
+    const auto leftEqualsRight = [&runner]
+    {
+        for (int i = 0; i < runner.blockSize; ++i)
+            if (std::abs (runner.buffer.getSample (0, i) - runner.buffer.getSample (1, i)) > 0.0f)
+                return false;
+
+        return true;
+    };
+
+    for (int i = 0; i < 100; ++i)
+        runner.processBlock();
+
+    REQUIRE (leftEqualsRight());
+    REQUIRE (processor->getLatencyStatus().texturesActive == false);
+
+    setParameter (*processor, params::id::shEnabled, 1.0f);
+    setParameter (*processor, params::id::shLevel, 100.0f);
+
+    for (int i = 0; i < 300; ++i)
+        runner.processBlock();
+
+    REQUIRE_FALSE (leftEqualsRight());
+    REQUIRE (runner.outputIsFinite());
+    REQUIRE (processor->getLatencyStatus().texturesActive);
+    REQUIRE (processor->getLatencyStatus().tier == dsp::LatencyTier::live); // le son direct n'attend pas
+}
+
+TEST_CASE ("Sur une piste mono, les textures sont repliées en mono", "[processor]")
+{
+    JuceEnvironment juce;
+    auto processor = createProcessor();
+
+    juce::AudioProcessor::BusesLayout layout;
+    layout.inputBuses.add (juce::AudioChannelSet::mono());
+    layout.outputBuses.add (juce::AudioChannelSet::mono());
+    REQUIRE (processor->setBusesLayout (layout));
+
+    processor->prepareToPlay (48000.0, 64);
+    setParameter (*processor, params::id::shEnabled, 1.0f);
+
+    juce::AudioBuffer<float> buffer (1, 64);
+    juce::MidiBuffer midi;
+
+    for (int block = 0; block < 300; ++block)
+    {
+        for (int i = 0; i < 64; ++i)
+            buffer.setSample (0, i, 0.3f * std::sin (0.05f * static_cast<float> (block * 64 + i)));
+
+        processor->processBlock (buffer, midi);
+    }
+
+    for (int i = 0; i < 64; ++i)
+        REQUIRE (std::isfinite (buffer.getSample (0, i)));
 }
 
 TEST_CASE ("Une capture rééchantillonnée déclare sa latence à l'hôte", "[processor]")
@@ -347,6 +419,10 @@ TEST_CASE ("Capture d'écran de l'interface avec une capture et une IR chargées
     setParameter (*processor, params::id::subEnabled, 1.0f);
     setParameter (*processor, params::id::hmEnabled, 1.0f);
     setParameter (*processor, params::id::fsPosition, 0.0f); // FREQ SHIFT avant l'ampli
+    setParameter (*processor, params::id::shEnabled, 1.0f);
+    setParameter (*processor, params::id::frEnabled, 1.0f);
+    setParameter (*processor, params::id::frHold, 1.0f);
+    setParameter (*processor, params::id::poEnabled, 1.0f);
     processor->loadAmpModel (exampleModels.getChildFile ("wavenet.nam"));
     processor->loadCabImpulseResponse (writeTestImpulseResponse (juce::File::getSpecialLocation (juce::File::tempDirectory)));
     waitForAmpModel (*processor);

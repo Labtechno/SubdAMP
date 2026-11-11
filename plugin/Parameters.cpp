@@ -61,9 +61,31 @@ namespace
     }
 
     std::unique_ptr<juce::AudioParameterChoice> makeChoice (const char* parameterId, const juce::String& name,
-                                                            const juce::StringArray& choices, int defaultIndex)
+                                                            const juce::StringArray& choices, int defaultIndex,
+                                                            int version = addedInVersion3)
     {
-        return std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { parameterId, addedInVersion3 }, name, choices, defaultIndex);
+        return std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { parameterId, version }, name, choices, defaultIndex);
+    }
+
+    std::unique_ptr<juce::AudioParameterChoice> makeSource (const char* parameterId, const juce::String& name)
+    {
+        return makeChoice (parameterId, name, { utf8 ("Avant l'ampli"), utf8 ("Fin de chaîne") },
+                           static_cast<int> (TextureSource::endOfChain), addedInVersion4);
+    }
+
+    juce::String formatSeconds (float value, int)
+    {
+        return juce::String (value, value < 10.0f ? 1 : 0) + " s";
+    }
+
+    juce::String formatBpm (float value, int)
+    {
+        return juce::String (juce::roundToInt (value)) + " BPM";
+    }
+
+    juce::String formatPerSecond (float value, int)
+    {
+        return juce::String (value, value < 10.0f ? 1 : 0) + " /s";
     }
 
     // Choix d'intervalle des voix d'harmonie, et leur valeur en degrés (voir harmonyVoiceSteps).
@@ -99,6 +121,40 @@ namespace
 
         return 0;
     }
+}
+
+namespace
+{
+    struct ShimmerChoice { const char* label; float semitones; };
+    const std::array<ShimmerChoice, 5> shimmerChoices {{
+        { "+octave", 12.0f }, { "+octave et quinte", 19.0f }, { "+2 octaves", 24.0f }, { "+quinte", 7.0f }, { "-octave", -12.0f }
+    }};
+
+    struct DivisionChoice { const char* label; double beats; };
+    const std::array<DivisionChoice, 6> divisionChoices {{
+        { "1/4", 1.0 }, { "1/8", 0.5 }, { "1/16", 0.25 }, { "1/32", 0.125 }, { "1/8 triolet", 1.0 / 3.0 }, { "1/16 triolet", 1.0 / 6.0 }
+    }};
+
+    template <typename Choices>
+    juce::StringArray labelsOf (const Choices& choices)
+    {
+        juce::StringArray labels;
+
+        for (const auto& choice : choices)
+            labels.add (juce::String::fromUTF8 (choice.label));
+
+        return labels;
+    }
+}
+
+float shimmerIntervalSemitones (int choiceIndex) noexcept
+{
+    return shimmerChoices[static_cast<std::size_t> (std::clamp (choiceIndex, 0, static_cast<int> (shimmerChoices.size()) - 1))].semitones;
+}
+
+double granularDivisionBeats (int choiceIndex) noexcept
+{
+    return divisionChoices[static_cast<std::size_t> (std::clamp (choiceIndex, 0, static_cast<int> (divisionChoices.size()) - 1))].beats;
 }
 
 std::optional<int> harmonyVoiceSteps (int choiceIndex) noexcept
@@ -196,6 +252,61 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
 
     layout.add (group ("cab", "Cab",
         makeSwitch (id::cabEnabled, addedInVersion2, "Cab", true)));
+
+    layout.add (group ("shimmer", "SHIMMER",
+        makeSwitch (id::shEnabled, addedInVersion4, "SHIMMER", false),
+        makeSource (id::shSource, "SHIMMER source"),
+        makeChoice (id::shInterval, "SHIMMER intervalle", labelsOf (shimmerChoices), 0, addedInVersion4),
+        makeFloat (id::shDecay, addedInVersion4, utf8 ("SHIMMER durée"),
+                   { 0.5f, 30.0f, 0.1f, 0.4f }, 6.0f, "s", formatSeconds),
+        makePercent (id::shAmount, "SHIMMER shimmer", 50.0f, 100.0f, addedInVersion4),
+        makeFloat (id::shTone, addedInVersion4, utf8 ("SHIMMER tonalité"),
+                   { 500.0f, 16000.0f, 1.0f, 0.3f }, 6000.0f, "Hz", formatHertz),
+        makePercent (id::shLevel, "SHIMMER niveau", 40.0f, 100.0f, addedInVersion4)));
+
+    layout.add (group ("poly", "POLY",
+        makeSwitch (id::poEnabled, addedInVersion4, "POLY", false),
+        makeSource (id::poSource, "POLY source"),
+        makeFloat (id::poInterval1, addedInVersion4, "POLY intervalle 1",
+                   { -24.0f, 24.0f, 0.01f }, 12.0f, "dt", formatSemitones),
+        makePercent (id::poLevel1, "POLY niveau 1", 60.0f, 100.0f, addedInVersion4),
+        makeFloat (id::poInterval2, addedInVersion4, "POLY intervalle 2",
+                   { -24.0f, 24.0f, 0.01f }, -12.0f, "dt", formatSemitones),
+        makePercent (id::poLevel2, "POLY niveau 2", 0.0f, 100.0f, addedInVersion4),
+        makeFloat (id::poFormant, addedInVersion4, "POLY formants",
+                   { -12.0f, 12.0f, 0.1f }, 0.0f, "dt", formatSemitones),
+        makePercent (id::poWidth, "POLY largeur", 60.0f, 100.0f, addedInVersion4)));
+
+    layout.add (group ("freeze", "FREEZE",
+        makeSwitch (id::frEnabled, addedInVersion4, "FREEZE", false),
+        makeSource (id::frSource, "FREEZE source"),
+        makeSwitch (id::frHold, addedInVersion4, "FREEZE figer", false),
+        makeFloat (id::frAttack, addedInVersion4, "FREEZE attaque",
+                   { 10.0f, 5000.0f, 1.0f, 0.3f }, 300.0f, "ms", formatMilliseconds),
+        makeFloat (id::frRelease, addedInVersion4, utf8 ("FREEZE relâche"),
+                   { 10.0f, 10000.0f, 1.0f, 0.3f }, 2000.0f, "ms", formatMilliseconds),
+        makeFloat (id::frTone, addedInVersion4, utf8 ("FREEZE tonalité"),
+                   { 500.0f, 16000.0f, 1.0f, 0.3f }, 8000.0f, "Hz", formatHertz),
+        makePercent (id::frLevel, "FREEZE niveau", 60.0f, 100.0f, addedInVersion4)));
+
+    layout.add (group ("granular", "GRANULAR",
+        makeSwitch (id::grEnabled, addedInVersion4, "GRANULAR", false),
+        makeSource (id::grSource, "GRANULAR source"),
+        makeChoice (id::grMode, "GRANULAR mode", { "Nuage", "Stutter" }, 0, addedInVersion4),
+        makeFloat (id::grSize, addedInVersion4, "GRANULAR taille",
+                   { 10.0f, 1000.0f, 1.0f, 0.4f }, 120.0f, "ms", formatMilliseconds),
+        makeFloat (id::grDensity, addedInVersion4, utf8 ("GRANULAR densité"),
+                   { 1.0f, 60.0f, 0.1f, 0.5f }, 12.0f, "/s", formatPerSecond),
+        makeFloat (id::grPitch, addedInVersion4, "GRANULAR hauteur",
+                   { -24.0f, 24.0f, 1.0f }, 0.0f, "dt", formatSemitones),
+        makePercent (id::grSpread, "GRANULAR dispersion", 30.0f, 100.0f, addedInVersion4),
+        makePercent (id::grReverse, utf8 ("GRANULAR inversés"), 25.0f, 100.0f, addedInVersion4),
+        makeChoice (id::grDivision, "GRANULAR division", labelsOf (divisionChoices), 2, addedInVersion4),
+        std::make_unique<juce::AudioParameterInt> (juce::ParameterID { id::grRepeats, addedInVersion4 },
+                                                   utf8 ("GRANULAR répétitions"), 1, 8, 4),
+        makePercent (id::grLevel, "GRANULAR niveau", 50.0f, 100.0f, addedInVersion4),
+        makeFloat (id::tempo, addedInVersion4, "Tempo (standalone)",
+                   { 40.0f, 240.0f, 1.0f }, 120.0f, "BPM", formatBpm)));
 
     layout.add (group ("fs", "FREQ SHIFT",
         makeSwitch (id::fsEnabled, addedInVersion2, "FREQ SHIFT", false),

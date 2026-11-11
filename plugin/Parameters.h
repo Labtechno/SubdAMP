@@ -68,6 +68,50 @@ namespace id
     inline constexpr const char* hmFormant  = "hmFormant";
     inline constexpr const char* hmDirect   = "hmDirect";
 
+    // SHIMMER (texture)
+    inline constexpr const char* shEnabled  = "shEnabled";
+    inline constexpr const char* shSource   = "shSource";
+    inline constexpr const char* shInterval = "shInterval";
+    inline constexpr const char* shDecay    = "shDecay";
+    inline constexpr const char* shAmount   = "shAmount";
+    inline constexpr const char* shTone     = "shTone";
+    inline constexpr const char* shLevel    = "shLevel";
+
+    // POLY (texture)
+    inline constexpr const char* poEnabled   = "poEnabled";
+    inline constexpr const char* poSource    = "poSource";
+    inline constexpr const char* poInterval1 = "poInterval1";
+    inline constexpr const char* poLevel1    = "poLevel1";
+    inline constexpr const char* poInterval2 = "poInterval2";
+    inline constexpr const char* poLevel2    = "poLevel2";
+    inline constexpr const char* poFormant   = "poFormant";
+    inline constexpr const char* poWidth     = "poWidth";
+
+    // FREEZE (texture)
+    inline constexpr const char* frEnabled = "frEnabled";
+    inline constexpr const char* frSource  = "frSource";
+    inline constexpr const char* frHold    = "frHold";
+    inline constexpr const char* frAttack  = "frAttack";
+    inline constexpr const char* frRelease = "frRelease";
+    inline constexpr const char* frTone    = "frTone";
+    inline constexpr const char* frLevel   = "frLevel";
+
+    // GRANULAR (texture)
+    inline constexpr const char* grEnabled  = "grEnabled";
+    inline constexpr const char* grSource   = "grSource";
+    inline constexpr const char* grMode     = "grMode";
+    inline constexpr const char* grSize     = "grSize";
+    inline constexpr const char* grDensity  = "grDensity";
+    inline constexpr const char* grPitch    = "grPitch";
+    inline constexpr const char* grSpread   = "grSpread";
+    inline constexpr const char* grReverse  = "grReverse";
+    inline constexpr const char* grDivision = "grDivision";
+    inline constexpr const char* grRepeats  = "grRepeats";
+    inline constexpr const char* grLevel    = "grLevel";
+
+    // Tempo utilisé quand l'hôte n'en donne pas (application standalone)
+    inline constexpr const char* tempo = "tempo";
+
     // FREQ SHIFT (décaleur de fréquence)
     inline constexpr const char* fsEnabled  = "fsEnabled";
     inline constexpr const char* fsPosition = "fsPosition";
@@ -83,10 +127,24 @@ enum class Position
     afterAmp = 1
 };
 
+/** Valeurs du paramètre de source des textures. */
+enum class TextureSource
+{
+    beforeAmp = 0,
+    endOfChain = 1
+};
+
 /** Version d'ajout des paramètres (exigée par JUCE pour les hôtes AU, ignorée en VST3). */
 inline constexpr int addedInVersion1 = 1;
 inline constexpr int addedInVersion2 = 2;
 inline constexpr int addedInVersion3 = 3;
+inline constexpr int addedInVersion4 = 4;
+
+/** Intervalle de la boucle du SHIMMER, en demi-tons, pour chaque choix du paramètre shInterval. */
+float shimmerIntervalSemitones (int choiceIndex) noexcept;
+
+/** Durée d'une découpe du GRANULAR (stutter), en temps, pour chaque choix du paramètre grDivision. */
+double granularDivisionBeats (int choiceIndex) noexcept;
 
 /**
     Intervalle d'une voix d'harmonie, en degrés de la gamme, pour chaque choix du paramètre

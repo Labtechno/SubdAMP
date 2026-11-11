@@ -42,6 +42,12 @@ public:
     void addKnob (const char* parameterId, const juce::String& label);
     void addChoice (const char* parameterId, const juce::String& label, int baseWidth = 170);
 
+    /** Gros bouton à bascule (FIGER du FREEZE), relié à un paramètre booléen. */
+    void addToggle (const char* parameterId, const juce::String& label, int baseWidth = 150);
+
+    /** Textes du bouton de position, selon son état (par défaut : avant / après l'ampli). */
+    void setPositionLabels (const juce::String& whenOff, const juce::String& whenOn, int baseWidth = 128);
+
     void setDescription (const juce::String& text) { description = text; repaint(); }
 
     /** Composant affiché à droite des réglages (non possédé), avec sa taille à l'échelle 1. */
@@ -62,8 +68,10 @@ private:
         juce::Label label;
         std::unique_ptr<juce::Slider> slider;
         std::unique_ptr<juce::ComboBox> combo;
+        std::unique_ptr<juce::TextButton> toggle;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sliderAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> comboAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> toggleAttachment;
         int baseWidth = 100;
     };
 
@@ -79,6 +87,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAttachment;
 
     juce::TextButton positionButton;
+    juce::String positionOffText, positionOnText;
+    int positionWidth = 128;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> positionAttachment;
 
     std::vector<std::unique_ptr<Control>> controls;

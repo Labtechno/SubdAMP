@@ -37,6 +37,9 @@ public:
     */
     void process (std::span<const float> dry, std::span<float> processed) noexcept;
 
+    /** Version stéréo : le même signal sec (mono) mélangé aux deux canaux traités. */
+    void processStereo (std::span<const float> dry, std::span<float> left, std::span<float> right) noexcept;
+
 private:
     LinearSmoother bypassAmount;
 };

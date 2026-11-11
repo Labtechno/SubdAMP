@@ -80,3 +80,15 @@ endif()
 if(NOT MSVC)
     target_compile_options(nam_core PRIVATE $<$<CONFIG:Debug>:-O2>)
 endif()
+
+#==============================================================================
+# Signalsmith Stretch — transposition polyphonique du module POLY (licence MIT, en-têtes).
+# Il récupère lui-même sa dépendance signalsmith-linear (MIT, FFT ; Accelerate sur macOS).
+#==============================================================================
+FetchContent_Declare(signalsmith_stretch
+    GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
+    GIT_TAG        1.4.0
+    GIT_SHALLOW    TRUE
+    GIT_SUBMODULES "")
+
+FetchContent_MakeAvailable(signalsmith_stretch)

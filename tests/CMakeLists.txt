@@ -16,6 +16,7 @@ add_executable(SubdAmpDspTests
     dsp/LinearSmootherTests.cpp
     dsp/ModuleTests.cpp
     dsp/ResamplingTests.cpp
+    dsp/TextureTests.cpp
     dsp/WhammyTests.cpp)
 
 target_link_libraries(SubdAmpDspTests PRIVATE subdamp_dsp Catch2::Catch2WithMain)

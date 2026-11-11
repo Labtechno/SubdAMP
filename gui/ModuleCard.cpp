@@ -50,6 +50,9 @@ ModuleCard::ModuleCard (juce::AudioProcessorValueTreeState& parametersToUse,
     addAndMakeVisible (powerButton);
     powerAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (parameters, enabledParameterId, powerButton);
 
+    positionOffText = juce::String::fromUTF8 ("AVANT L'AMPLI");
+    positionOnText = juce::String::fromUTF8 ("APRÈS L'AMPLI");
+
     if (positionParameterId != nullptr)
     {
         positionButton.setClickingTogglesState (true);
@@ -139,10 +142,34 @@ void ModuleCard::setScale (float newScale)
     repaint();
 }
 
+void ModuleCard::setPositionLabels (const juce::String& whenOff, const juce::String& whenOn, int baseWidth)
+{
+    positionOffText = whenOff;
+    positionOnText = whenOn;
+    positionWidth = baseWidth;
+    updatePositionText();
+    resized();
+}
+
 void ModuleCard::updatePositionText()
 {
-    positionButton.setButtonText (positionButton.getToggleState() ? juce::String::fromUTF8 ("APRÈS L'AMPLI")
-                                                                  : juce::String::fromUTF8 ("AVANT L'AMPLI"));
+    positionButton.setButtonText (positionButton.getToggleState() ? positionOnText : positionOffText);
+}
+
+void ModuleCard::addToggle (const char* parameterId, const juce::String& labelText, int baseWidth)
+{
+    auto& control = addControl ({}, baseWidth);
+
+    control.toggle = std::make_unique<juce::TextButton> (labelText);
+    auto& button = *control.toggle;
+    button.setClickingTogglesState (true);
+    button.setColour (juce::TextButton::buttonColourId, theme::panelRaised);
+    button.setColour (juce::TextButton::buttonOnColourId, theme::latencyTexture);
+    button.setColour (juce::TextButton::textColourOnId, theme::background);
+    addAndMakeVisible (button);
+
+    control.toggleAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (parameters, parameterId, button);
+    updateEnabledLook();
 }
 
 void ModuleCard::updateEnabledLook()
@@ -159,6 +186,9 @@ void ModuleCard::updateEnabledLook()
 
         if (control->combo != nullptr)
             control->combo->setAlpha (alpha);
+
+        if (control->toggle != nullptr)
+            control->toggle->setAlpha (alpha);
     }
 
     repaint();
@@ -181,9 +211,11 @@ void ModuleCard::paint (juce::Graphics& g)
     header.removeFromLeft (40.0f * scale); // interrupteur
 
     if (positionButton.isVisible())
-        header.removeFromRight (140.0f * scale);
+        header.removeFromRight (static_cast<float> (positionWidth + 12) * scale);
 
-    const auto badgeWidth = (shownLatency.isEmpty() ? 74.0f : 132.0f) * scale;
+    const auto badgeText = theme::labelFor (tier) + shownLatency;
+    const auto badgeWidth = juce::GlyphArrangement::getStringWidth (juce::FontOptions (11.0f * scale, juce::Font::bold), badgeText)
+                          + 26.0f * scale;
     const auto badge = header.removeFromRight (badgeWidth).withSizeKeepingCentre (badgeWidth, 22.0f * scale);
     theme::drawLatencyBadge (g, badge, tier, shownLatency, scale);
     header.removeFromRight (16.0f * scale);
@@ -211,7 +243,10 @@ void ModuleCard::resized()
     powerButton.setBounds (header.removeFromLeft (px (30.0f)).withSizeKeepingCentre (px (28.0f), px (28.0f)));
 
     if (positionButton.isVisible())
-        positionButton.setBounds (header.removeFromRight (px (128.0f)).withSizeKeepingCentre (px (128.0f), px (28.0f)));
+    {
+        const auto width = px (static_cast<float> (positionWidth));
+        positionButton.setBounds (header.removeFromRight (width).withSizeKeepingCentre (width, px (28.0f)));
+    }
 
     area.removeFromTop (px (12.0f));
     area.removeFromBottom (px (12.0f));
@@ -259,6 +294,10 @@ void ModuleCard::resized()
         {
             control->combo->setBounds (cell.withSizeKeepingCentre (cell.getWidth(), px (static_cast<float> (comboHeight)))
                                            .translated (0, -px (10.0f)));
+        }
+        else if (control->toggle != nullptr)
+        {
+            control->toggle->setBounds (cell.withSizeKeepingCentre (cell.getWidth(), px (64.0f)).translated (0, -px (10.0f)));
         }
     }
 }

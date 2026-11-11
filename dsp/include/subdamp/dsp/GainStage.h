@@ -26,6 +26,9 @@ public:
 
     void process (std::span<float> block) noexcept;
 
+    /** Même gain lissé sur deux canaux (les deux blocs ont la même taille). */
+    void processStereo (std::span<float> left, std::span<float> right) noexcept;
+
 private:
     LinearSmoother gain;
 };
