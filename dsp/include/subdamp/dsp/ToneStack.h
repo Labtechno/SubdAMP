@@ -25,6 +25,9 @@ public:
 
     void setGains (float bassDb, float midDb, float trebleDb) noexcept;
 
+    /** Les trois filtres pour ces réglages (aussi utilisé par l'interface pour tracer la courbe). */
+    static std::array<BiquadCoefficients, 3> coefficientsFor (double sampleRate, float bassDb, float midDb, float trebleDb) noexcept;
+
 private:
     void updateCoefficients() noexcept;
 
@@ -49,6 +52,10 @@ public:
 
 private:
     std::array<Biquad, 7> stages;
+
+public:
+    /** Les filtres du cab simulé (aussi utilisé par l'interface pour tracer sa courbe). */
+    static std::array<BiquadCoefficients, 7> coefficientsFor (double sampleRate) noexcept;
 };
 
 } // namespace subdamp::dsp

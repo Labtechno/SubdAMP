@@ -6,12 +6,13 @@
 
 #include <functional>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace subdamp::gui
 {
 
-/** Interrupteur rond façon LED de pédale : anneau éteint, disque ambre allumé. */
+/** Interrupteur de module : témoin dans sa bague métallique, ambre quand le module tourne. */
 class PowerButton final : public juce::Button
 {
 public:
@@ -21,8 +22,8 @@ public:
 };
 
 /**
-    Voyant façon LED de pédale : sa luminosité suit un niveau de 0 à 1, relu par refresh()
-    (minuteur de l'interface). Un texte sous la lampe dit l'état en clair.
+    Voyant d'état : sa luminosité suit un niveau de 0 à 1, relu par refresh() (minuteur de
+    l'interface). Un texte sous la lampe dit l'état en clair.
 */
 class StatusLamp final : public juce::Component,
                          public juce::SettableTooltipClient
@@ -47,9 +48,14 @@ private:
 };
 
 /**
-    Panneau des réglages d'un module, affiché en grand sous le pédalier : titre, description,
-    badge de latence, interrupteur, potards et listes déroulantes, potard MIX à part à droite,
-    et un composant libre (sélecteur de fichier de l'ampli et du cab).
+    Façade d'un module, affichée en grand sous le pédalier, comme la face avant d'un instrument :
+
+      - bandeau : interrupteur, plaque d'identification (code du module, place dans la chaîne),
+        nom, description, étiquette de latence ;
+      - à gauche, l'écran du module (non possédé) ;
+      - au centre, les réglages (sur deux rangées s'ils ne tiennent pas sur une) et un
+        composant libre en dessous (sélecteur de fichier de l'ampli et du cab) ;
+      - à droite, le MIX, isolé par un filet : il dose tout le module.
 
     Tout est relié aux paramètres par des attachements JUCE : l'automation du DAW et
     l'interface restent synchronisées sans code supplémentaire.
@@ -82,10 +88,16 @@ public:
 
     void setDescription (const juce::String& text) { description = text; repaint(); }
 
-    /** Composant affiché à droite des réglages (non possédé), avec sa taille à l'échelle 1. */
+    /** Plaque d'identification : code du module et place dans la chaîne (1 à count). */
+    void setIdentity (const juce::String& code, int position, int count);
+
+    /** Écran du module (non possédé), à gauche des réglages. */
+    void setDisplay (juce::Component* display);
+
+    /** Composant affiché sous les réglages (non possédé), avec sa taille à l'échelle 1. */
     void setFooter (juce::Component* component, int baseWidth, int baseHeight);
 
-    /** Texte ajouté au badge de latence (« · 15 ms »), relu par refreshLatency(). */
+    /** Texte ajouté à l'étiquette de latence (« 15 ms »), relu par refreshLatency(). */
     void setLatencyText (std::function<juce::String()> provider) { latencyText = std::move (provider); }
     void refreshLatency();
 
@@ -110,11 +122,14 @@ private:
 
     Control& addControl (const juce::String& label, int baseWidth);
     std::unique_ptr<Control> makeKnob (const char* parameterId, const juce::String& label);
+    void styleLabel (juce::Label& label, juce::Colour colour);
     void layoutControl (Control& control, juce::Rectangle<int> cell);
+    void layoutRow (std::span<Control* const> row, juce::Rectangle<int> area);
     void updateEnabledLook();
 
     juce::AudioProcessorValueTreeState& parameters;
-    juce::String title, description;
+    juce::String title, description, code;
+    int position = 0, positionCount = 0;
     dsp::LatencyTier tier;
 
     PowerButton powerButton;
@@ -122,10 +137,13 @@ private:
 
     std::vector<std::unique_ptr<Control>> controls;
     std::unique_ptr<Control> mixControl;
-    int mixDividerX = -1;
 
+    juce::Component* display = nullptr;
     juce::Component* footer = nullptr;
     int footerBaseWidth = 0, footerBaseHeight = 0;
+
+    // Zones calculées dans resized(), dessinées dans paint()
+    juce::Rectangle<float> headerArea, mixArea, controlsArea;
 
     std::function<juce::String()> latencyText;
     juce::String shownLatency;

@@ -63,6 +63,12 @@ public:
     /** Retard de la boucle (transposition + bloc), en échantillons : délai entre deux générations. */
     int loopDelaySamples() const noexcept;
 
+    /** Au maximum, part d'énergie gardée par chaque génération transposée (calibrage de la boucle). */
+    static constexpr float energyPerGenerationAtMaximum = 0.8f;
+
+    /** Les aigus (au-dessus de TONE) décroissent deux fois plus vite que les graves. */
+    static constexpr double highDecayRatio = 0.5;
+
 private:
     static constexpr int numLines = 8;
     static constexpr int numDiffusers = 4;

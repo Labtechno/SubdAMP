@@ -174,6 +174,9 @@ void SubdAmpProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     preparedBlockSize = maximumExpectedSamplesPerBlock;
     preparedSampleRate.store (sampleRate, std::memory_order_relaxed);
 
+    scope.prepare (sampleRate);
+    loadMeasurer.reset (sampleRate, maximumExpectedSamplesPerBlock);
+
     // L'ordre demandé s'applique directement, sans fondu.
     activePackedOrder = requestedOrder.load (std::memory_order_acquire);
     activeOrder = unpackChainOrder (activePackedOrder);
@@ -235,6 +238,9 @@ void SubdAmpProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     juce::ScopedNoDenormals noDenormals;
 
     const int numSamples = buffer.getNumSamples();
+
+    // Charge mesurée sur le vrai calcul (sans verrou bloquant : essai de verrou côté JUCE).
+    const juce::AudioProcessLoadMeasurer::ScopedTimer loadTimer (loadMeasurer, numSamples);
 
     if (numSamples == 0 || buffer.getNumChannels() == 0)
         return;
@@ -321,12 +327,33 @@ void SubdAmpProcessor::processChunk (float* leftSamples, float* rightSamples, in
 
     bypass.processStereo (dry, left, right);
 
-    // Voyant du GATE : il s'allume quand le gate coupe (relâche, puis silence entre les notes).
-    // Arrêté ou contourné, le gate ne coupe rien : voyant éteint.
-    const auto gateRunning = ! bypass.isFullyBypassed() && isOn (*enabledValues[indexOf (ModuleId::gate)]);
-    gateCutting.store (gateRunning ? 1.0f - gate.getOpening() : 0.0f, std::memory_order_relaxed);
+    scope.push (left, right);
+    publishTelemetry();
 
     publishPeak (meters.outputPeak, std::max (dsp::blockPeak (left), dsp::blockPeak (right)));
+}
+
+void SubdAmpProcessor::publishTelemetry() noexcept
+{
+    const auto running = [this] (ModuleId module)
+    {
+        return ! bypass.isFullyBypassed() && isOn (*enabledValues[indexOf (module)]);
+    };
+
+    // Voyant du GATE : il s'allume quand le gate coupe (relâche, puis silence entre les notes).
+    // Arrêté ou contourné, le gate ne coupe rien : voyant éteint.
+    const auto gateRunning = running (ModuleId::gate);
+    telemetry.gateCutting.store (gateRunning ? 1.0f - gate.getOpening() : 0.0f, std::memory_order_relaxed);
+    telemetry.gateLevel.store (gateRunning ? gate.getDetectorLevel() : 0.0f, std::memory_order_relaxed);
+
+    telemetry.whammySemitones.store (running (ModuleId::whammy) ? whammy.getCurrentSemitones() : 0.0f, std::memory_order_relaxed);
+
+    const auto harmonyRunning = running (ModuleId::harmonizer);
+    telemetry.harmonyNote.store (harmonyRunning ? harmonizer.getDetectedNote() : -1, std::memory_order_relaxed);
+    telemetry.harmonyShift1.store (harmonizer.getVoiceShiftSemitones (0), std::memory_order_relaxed);
+    telemetry.harmonyShift2.store (harmonizer.getVoiceShiftSemitones (1), std::memory_order_relaxed);
+
+    telemetry.freezeHeld.store (running (ModuleId::freeze) && freeze.isFrozen(), std::memory_order_relaxed);
 }
 
 void SubdAmpProcessor::updateChainOrder() noexcept

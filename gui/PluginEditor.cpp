@@ -15,126 +15,71 @@ namespace
         return (ms < 10.0 ? juce::String (ms, 1) : juce::String (juce::roundToInt (ms))) + " ms";
     }
 
+    /** Valeur pour un afficheur segmenté : une décimale sous 10, entier au-delà. */
+    juce::String segmentValue (double value)
+    {
+        return value < 10.0 ? juce::String (value, 1) : juce::String (juce::roundToInt (value));
+    }
+
     // Mise en page, à l'échelle 1.
-    constexpr int headerHeight = 64;
-    constexpr int boardHeight = 180;
-    constexpr int ioColumnWidth = 110;
-    constexpr int margin = 20;
+    constexpr int headerHeight = 92;
+    constexpr int stripWidth = 92;
+    constexpr int boardHeight = 184;
+    constexpr int margin = 14;
 }
-
-//==============================================================================
-/** Apparence provisoire : potards, listes et boutons aux couleurs de Theme.h. */
-class SubdAmpEditor::LookAndFeel final : public juce::LookAndFeel_V4
-{
-public:
-    LookAndFeel()
-    {
-        setColour (juce::ResizableWindow::backgroundColourId, theme::background);
-        setColour (juce::Label::textColourId, theme::text);
-        setColour (juce::Slider::textBoxTextColourId, theme::text);
-        setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-        setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-        setColour (juce::TextButton::buttonColourId, theme::panelRaised);
-        setColour (juce::TextButton::buttonOnColourId, theme::bypassed);
-        setColour (juce::TextButton::textColourOffId, theme::text);
-        setColour (juce::TextButton::textColourOnId, theme::text);
-        setColour (juce::ComboBox::backgroundColourId, theme::panelRaised);
-        setColour (juce::ComboBox::outlineColourId, theme::panelOutline);
-        setColour (juce::ComboBox::textColourId, theme::text);
-        setColour (juce::ComboBox::arrowColourId, theme::accent);
-        setColour (juce::PopupMenu::backgroundColourId, theme::panelRaised);
-        setColour (juce::PopupMenu::textColourId, theme::text);
-        setColour (juce::PopupMenu::highlightedBackgroundColourId, theme::accent.withAlpha (0.3f));
-        setColour (juce::PopupMenu::highlightedTextColourId, theme::text);
-        setColour (juce::TooltipWindow::backgroundColourId, theme::panelRaised);
-        setColour (juce::TooltipWindow::textColourId, theme::text);
-    }
-
-    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
-                           float sliderPos, float startAngle, float endAngle, juce::Slider& slider) override
-    {
-        const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat().reduced (2.0f);
-        const auto radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
-        const auto centre = bounds.getCentre();
-        const auto trackWidth = juce::jmax (2.0f, radius * 0.12f);
-        const auto arcRadius = radius - trackWidth * 0.5f;
-        const auto valueAngle = startAngle + sliderPos * (endAngle - startAngle);
-
-        // Paramètres centrés sur zéro (gains en dB, intervalles, décalage) : l'arc part du milieu.
-        const auto range = slider.getRange();
-        const auto isBipolar = range.getStart() < 0.0 && range.getEnd() > 0.0;
-        const auto arcStart = isBipolar ? startAngle + static_cast<float> (slider.valueToProportionOfLength (0.0)) * (endAngle - startAngle)
-                                        : startAngle;
-
-        juce::Path track;
-        track.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f, startAngle, endAngle, true);
-        g.setColour (theme::panelOutline);
-        g.strokePath (track, juce::PathStrokeType (trackWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        juce::Path value;
-        value.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
-                             juce::jmin (arcStart, valueAngle), juce::jmax (arcStart, valueAngle), true);
-        g.setColour (theme::accent);
-        g.strokePath (value, juce::PathStrokeType (trackWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        const auto knobRadius = arcRadius - trackWidth * 1.6f;
-        g.setColour (theme::panelRaised.brighter (0.08f));
-        g.fillEllipse (juce::Rectangle<float> (knobRadius * 2.0f, knobRadius * 2.0f).withCentre (centre));
-
-        const auto pointerStart = centre.getPointOnCircumference (knobRadius * 0.35f, valueAngle);
-        const auto pointerEnd = centre.getPointOnCircumference (knobRadius * 0.9f, valueAngle);
-        g.setColour (theme::text);
-        g.drawLine ({ pointerStart, pointerEnd }, trackWidth * 0.8f);
-    }
-};
 
 //==============================================================================
 SubdAmpEditor::SubdAmpEditor (SubdAmpProcessor& processorToEdit)
     : AudioProcessorEditor (processorToEdit),
       subdAmp (processorToEdit),
-      lookAndFeel (std::make_unique<LookAndFeel>()),
+      lookAndFeel (std::make_unique<LabLookAndFeel>()),
+      scope (processorToEdit.getScope()),
+      latencyReadout (utf8 ("LATENCE"), "ms", 4),
+      textureReadout (utf8 ("TEXTURES"), "ms", 4),
+      cpuReadout (utf8 ("CHARGE DSP"), "%", 3),
       ampFile (processorToEdit, FileSlot::Kind::ampModel),
       cabFile (processorToEdit, FileSlot::Kind::impulseResponse),
       pedalBoard (processorToEdit.getParameters(),
                   [this] (ModuleId module) { selectModule (module); },
                   [this] (ModuleId module, int newIndex) { moveModule (module, newIndex); }),
-      inputAttachment (processorToEdit.getParameters(), params::id::inputGain, inputKnob),
-      outputAttachment (processorToEdit.getParameters(), params::id::outputGain, outputKnob),
+      inputAttachment (processorToEdit.getParameters(), params::id::inputGain, inputFader),
+      outputAttachment (processorToEdit.getParameters(), params::id::outputGain, outputFader),
       bypassAttachment (processorToEdit.getParameters(), params::id::bypass, bypassButton)
 {
     setLookAndFeel (lookAndFeel.get());
 
-    // Entrée / sortie
-    for (auto* knob : { &inputKnob, &outputKnob })
+    // Faders d'entrée et de sortie
+    for (auto* fader : { &inputFader, &outputFader })
     {
-        knob->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        knob->setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
-        knob->setDoubleClickReturnValue (true, 0.0);
-        addAndMakeVisible (*knob);
-    }
-
-    for (auto [label, text] : { std::pair { &inputLabel, "ENTRÉE" }, std::pair { &outputLabel, "SORTIE" } })
-    {
-        label->setText (utf8 (text), juce::dontSendNotification);
-        label->setJustificationType (juce::Justification::centred);
-        label->setColour (juce::Label::textColourId, theme::textDim);
-        addAndMakeVisible (*label);
+        fader->setSliderStyle (juce::Slider::LinearVertical);
+        fader->setDoubleClickReturnValue (true, 0.0);
+        fader->setTooltip (utf8 ("Double-clic : 0 dB"));
+        addAndMakeVisible (*fader);
     }
 
     bypassButton.setButtonText ("BYPASS");
     bypassButton.setClickingTogglesState (true);
+    bypassButton.getProperties().set (LabLookAndFeel::styleProperty, "bypass");
     bypassButton.setTooltip (utf8 ("Contourne toute la chaîne (fondu sans clic)"));
     addAndMakeVisible (bypassButton);
 
-    addAndMakeVisible (inputMeter);
-    addAndMakeVisible (outputMeter);
-    addAndMakeVisible (pedalBoard);
+    latencyReadout.setTooltip (utf8 ("Retard du son entendu : catégorie la plus lente parmi les modules mélangés, retards cumulés"));
+    textureReadout.setTooltip (utf8 ("Retard des textures mélangées au son direct (le son direct ne les attend pas)"));
+    cpuReadout.setTooltip (utf8 ("Part du temps de chaque bloc audio passée à calculer SubdAmp (mesure réelle)"));
+
+    for (juce::Component* component : { static_cast<juce::Component*> (&inputMeter), static_cast<juce::Component*> (&outputMeter),
+                                        static_cast<juce::Component*> (&scope), static_cast<juce::Component*> (&latencyReadout),
+                                        static_cast<juce::Component*> (&textureReadout), static_cast<juce::Component*> (&cpuReadout),
+                                        static_cast<juce::Component*> (&pedalBoard) })
+        addAndMakeVisible (component);
 
     buildCards();
 
     shownOrder = subdAmp.getChainOrder();
     pedalBoard.setOrder (shownOrder);
+    updateIdentities();
     shownLatency = subdAmp.getLatencyStatus();
+    updateReadouts();
     selectModule (subdAmp.openModule);
 
     setResizable (true, true);
@@ -162,7 +107,7 @@ void SubdAmpEditor::buildCards()
     gate.setDescription (utf8 ("Coupe le souffle entre les notes. Hystérésis et maintien : les fins de notes ne hachent pas. Le voyant s'allume quand il coupe."));
     gate.addKnob (params::id::gateThreshold, "SEUIL");
     gate.addKnob (params::id::gateRelease, utf8 ("RELÂCHE"));
-    gate.addLamp (utf8 ("ÉTAT"), [this] { return subdAmp.getGateCutting(); }, theme::error, "COUPE", "PASSE")
+    gate.addLamp (utf8 ("ÉTAT"), [this] { return subdAmp.getGateCutting(); }, theme::alert, "COUPE", "PASSE")
         .setTooltip (utf8 ("S'allume quand le gate coupe : pendant la relâche, puis entre les notes. Éteint quand le son passe."));
 
     auto& sub = cardFor (ModuleId::sub);
@@ -256,10 +201,17 @@ void SubdAmpEditor::buildCards()
     freqShift.addKnob (params::id::fsShift, utf8 ("DÉCALAGE"));
     freqShift.addKnob (params::id::fsFeedback, "RETOUR");
 
-    // Chaque module : son MIX, isolé à droite du panneau (sauf le GATE, qui n'en a pas).
+    // Chaque module : son MIX, isolé à droite (sauf le GATE, qui n'en a pas), et son écran à gauche.
     for (const auto& info : moduleInfos)
+    {
+        auto& card = cardFor (info.id);
+
         if (info.mixParameter != nullptr)
-            cardFor (info.id).setMixKnob (info.mixParameter);
+            card.setMixKnob (info.mixParameter);
+
+        displays[indexOf (info.id)] = std::make_unique<ModuleDisplay> (info.id, subdAmp);
+        card.setDisplay (displays[indexOf (info.id)].get());
+    }
 
     for (auto& card : cards)
         addChildComponent (*card);
@@ -280,6 +232,7 @@ void SubdAmpEditor::selectModule (ModuleId module)
 
     cardFor (module).refreshLatency();
     cardFor (module).refreshLamps();
+    displays[indexOf (module)]->refresh();
 }
 
 void SubdAmpEditor::moveModule (ModuleId module, int newIndex)
@@ -287,7 +240,44 @@ void SubdAmpEditor::moveModule (ModuleId module, int newIndex)
     subdAmp.moveModule (module, newIndex);
     shownOrder = subdAmp.getChainOrder();
     pedalBoard.setOrder (shownOrder);
+    updateIdentities();
     selectModule (module); // la pédale déplacée devient celle dont on voit les réglages
+}
+
+void SubdAmpEditor::updateIdentities()
+{
+    // Plaque de chaque façade : référence du module et sa place réelle dans la chaîne.
+    for (std::size_t i = 0; i < shownOrder.size(); ++i)
+    {
+        const auto& info = infoFor (shownOrder[i]);
+        cardFor (info.id).setIdentity (info.code, static_cast<int> (i) + 1, static_cast<int> (numModules));
+    }
+}
+
+void SubdAmpEditor::updateReadouts()
+{
+    using namespace theme;
+
+    if (shownLatency.milliseconds > 0.0 || shownLatency.tier != dsp::LatencyTier::live)
+        latencyReadout.setValue (segmentValue (shownLatency.milliseconds), colourFor (shownLatency.tier));
+    else
+        latencyReadout.setValue ("0.0", colourFor (shownLatency.tier));
+
+    latencyReadout.setStatus (labelFor (shownLatency.tier), colourFor (shownLatency.tier));
+
+    if (shownLatency.texturesActive)
+    {
+        textureReadout.setValue (segmentValue (shownLatency.textureMilliseconds), steel);
+        textureReadout.setStatus ("TEXTURE", steel);
+    }
+    else
+    {
+        textureReadout.setValue ("--", textFaint);
+        textureReadout.setStatus ("AUCUNE", textFaint);
+    }
+
+    const auto load = juce::roundToInt (smoothedCpu * 100.0);
+    cpuReadout.setValue (juce::String (load), load >= 80 ? alert : (load >= 50 ? amber : medical));
 }
 
 float SubdAmpEditor::scale() const noexcept
@@ -298,40 +288,57 @@ float SubdAmpEditor::scale() const noexcept
 //==============================================================================
 void SubdAmpEditor::paint (juce::Graphics& g)
 {
+    using namespace theme;
+
     const auto s = scale();
-    auto area = getLocalBounds().toFloat();
+    g.fillAll (graphite);
 
-    g.fillAll (theme::background);
+    // Bandeau : plaque pleine largeur
+    drawPlate (g, headerArea, s, anthracite, 6.0f * s);
 
-    auto header = area.removeFromTop (headerHeight * s).reduced (margin * s, 0.0f);
-
-    g.setColour (theme::accent);
-    g.setFont (juce::FontOptions (28.0f * s, juce::Font::bold));
-    g.drawText ("SUBDAMP", header.removeFromLeft (170.0f * s), juce::Justification::centredLeft);
-
-    g.setColour (theme::textDim);
-    g.setFont (juce::FontOptions (13.0f * s));
-    g.drawText (utf8 ("pitch · ampli · textures"), header.removeFromLeft (220.0f * s), juce::Justification::centredLeft);
-
-    // Latence de ce que tu entends : la catégorie la plus lente parmi les modules allumés.
-    const auto badge = juce::Rectangle<float> (150.0f * s, 26.0f * s)
-                           .withCentre ({ static_cast<float> (bypassButton.getX()) - 95.0f * s,
-                                          static_cast<float> (bypassButton.getBounds().getCentreY()) });
-
-    theme::drawLatencyBadge (g, badge, shownLatency.tier, utf8 (" · ") + milliseconds (shownLatency.milliseconds), s);
-
-    // Textures mélangées : second badge, leur retard est à part (le son direct ne les attend pas).
-    if (shownLatency.texturesActive)
+    // Plaque de marque : nom gravé, désignation, numéro de série (version et format réels)
     {
-        const auto suffix = shownLatency.textureMilliseconds > 0.0 ? utf8 (" · ") + milliseconds (shownLatency.textureMilliseconds)
-                                                                   : juce::String();
-        theme::drawLatencyBadge (g, badge.translated (-162.0f * s, 0.0f), dsp::LatencyTier::texture, suffix, s);
+        auto brand = brandArea;
+        g.setColour (amber);
+        g.fillRect (brand.removeFromLeft (4.0f * s).reduced (0.0f, 8.0f * s));
+        brand.removeFromLeft (12.0f * s);
+
+        drawSilkscreen (g, "SUBDAMP", brand.removeFromTop (brand.getHeight() * 0.52f).withTrimmedTop (4.0f * s),
+                        titleFont (38.0f * s).withKerningFactor (0.08f), juce::Justification::bottomLeft, text);
+
+        g.setColour (textDim);
+        g.setFont (monoFont (10.5f * s));
+        g.drawText (utf8 ("PROCESSEUR DE HAUTEUR · AMPLI · TEXTURES"), brand.removeFromTop (16.0f * s), juce::Justification::centredLeft, false);
+
+        g.setColour (textFaint);
+        g.setFont (monoFont (9.5f * s));
+        // Numéro de série : codes fabricant et produit du plugin, version, format réellement chargé.
+        auto serial = utf8 ("S/N SBDM-SDP1  ·  V") + juce::String (JucePlugin_VersionString);
+
+        if (subdAmp.wrapperType != juce::AudioProcessor::wrapperType_Undefined)
+            serial += utf8 ("  ·  ") + juce::String (juce::AudioProcessor::getWrapperTypeDescription (subdAmp.wrapperType)).toUpperCase();
+
+        g.drawText (serial, brand.removeFromTop (14.0f * s), juce::Justification::centredLeft, false);
     }
 
-    // Fond de la zone du pédalier
-    const auto board = area.removeFromTop (boardHeight * s).reduced (margin * s, 6.0f * s);
-    g.setColour (theme::panel.withAlpha (0.5f));
-    g.fillRoundedRectangle (board, 12.0f * s);
+    for (const auto& corner : { headerArea.getTopLeft(), headerArea.getTopRight(), headerArea.getBottomLeft(), headerArea.getBottomRight() })
+        drawScrew (g, corner + juce::Point<float> (corner.x < headerArea.getCentreX() ? 10.0f : -10.0f,
+                                                   corner.y < headerArea.getCentreY() ? 10.0f : -10.0f) * s, 3.4f * s, corner.x * 0.01f);
+
+    // Flancs : entrée et sortie
+    for (const auto& [strip, caption] : { std::pair { inputStrip, utf8 ("ENTRÉE") }, std::pair { outputStrip, utf8 ("SORTIE") } })
+    {
+        drawPlate (g, strip, s, anthracite, 6.0f * s);
+        drawSilkscreen (g, caption, strip.withHeight (30.0f * s), labelFont (13.0f * s), juce::Justification::centred, textDim);
+
+        for (const auto y : { strip.getY() + 10.0f * s, strip.getBottom() - 10.0f * s })
+            for (const auto x : { strip.getX() + 10.0f * s, strip.getRight() - 10.0f * s })
+                if (y > strip.getCentreY())
+                    drawScrew (g, { x, y }, 3.0f * s, x * 0.02f);
+    }
+
+    // Baie du pédalier, en retrait
+    drawRecess (g, bayArea, s, 6.0f * s);
 }
 
 void SubdAmpEditor::resized()
@@ -339,41 +346,67 @@ void SubdAmpEditor::resized()
     const auto s = scale();
     const auto px = [s] (float value) { return juce::roundToInt (value * s); };
 
-    auto area = getLocalBounds();
-    auto header = area.removeFromTop (px (headerHeight)).reduced (px (margin), 0);
-    bypassButton.setBounds (header.removeFromRight (px (100.0f)).withSizeKeepingCentre (px (100.0f), px (30.0f)));
+    auto area = getLocalBounds().reduced (px (margin));
 
-    // Rangée du haut : entrée, pédalier, sortie
-    auto row = area.removeFromTop (px (boardHeight)).reduced (px (margin), px (6.0f));
+    // Bandeau
+    auto header = area.removeFromTop (px (headerHeight));
+    headerArea = header.toFloat();
+    area.removeFromTop (px (10.0f));
 
-    const auto layoutIoColumn = [&] (juce::Rectangle<int> column, juce::Label& label, juce::Slider& knob,
-                                     LevelMeter& meter, bool meterOnLeft)
+    auto headerContent = header.reduced (px (24.0f), px (12.0f));
+    brandArea = headerContent.removeFromLeft (px (330.0f)).toFloat();
+
+    bypassButton.setBounds (headerContent.removeFromRight (px (120.0f)).withSizeKeepingCentre (px (120.0f), px (44.0f)));
+    headerContent.removeFromRight (px (14.0f));
+    cpuReadout.setBounds (headerContent.removeFromRight (px (112.0f)));
+    headerContent.removeFromRight (px (10.0f));
+    textureReadout.setBounds (headerContent.removeFromRight (px (150.0f)));
+    headerContent.removeFromRight (px (10.0f));
+    latencyReadout.setBounds (headerContent.removeFromRight (px (170.0f)));
+    headerContent.removeFromRight (px (12.0f));
+    scope.setBounds (headerContent);
+
+    for (auto* readout : { &latencyReadout, &textureReadout, &cpuReadout })
+        readout->setScale (s);
+
+    scope.setScale (s);
+
+    // Flancs : fader et échelle de témoins
+    const auto layoutStrip = [&] (juce::Rectangle<int> strip, juce::Slider& fader, LevelMeter& meter, bool meterOnLeft)
     {
-        column = column.reduced (px (8.0f), px (8.0f));
-        label.setFont (juce::FontOptions (12.0f * s, juce::Font::bold));
-        label.setBounds (column.removeFromTop (px (20.0f)));
+        auto content = strip.reduced (px (8.0f), 0).withTrimmedTop (px (32.0f)).withTrimmedBottom (px (24.0f));
+        auto meterArea = meterOnLeft ? content.removeFromLeft (px (14.0f)) : content.removeFromRight (px (14.0f));
+        meter.setBounds (meterArea.withTrimmedBottom (px (30.0f)).withTrimmedTop (px (6.0f)));
 
-        auto meterArea = meterOnLeft ? column.removeFromLeft (px (10.0f)) : column.removeFromRight (px (10.0f));
-        meter.setBounds (meterArea.reduced (0, px (4.0f)));
-
-        knob.setTextBoxStyle (juce::Slider::TextBoxBelow, false, px (80.0f), px (20.0f));
-        knob.setBounds (column.reduced (px (4.0f), 0));
+        fader.setTextBoxStyle (juce::Slider::TextBoxBelow, false, content.getWidth(), px (22.0f));
+        fader.setBounds (content);
     };
 
-    layoutIoColumn (row.removeFromLeft (px (ioColumnWidth)), inputLabel, inputKnob, inputMeter, true);
-    layoutIoColumn (row.removeFromRight (px (ioColumnWidth)), outputLabel, outputKnob, outputMeter, false);
+    const auto inputArea = area.removeFromLeft (px (stripWidth));
+    const auto outputArea = area.removeFromRight (px (stripWidth));
+    inputStrip = inputArea.toFloat();
+    outputStrip = outputArea.toFloat();
+    layoutStrip (inputArea, inputFader, inputMeter, false);
+    layoutStrip (outputArea, outputFader, outputMeter, true);
 
-    pedalBoard.setBounds (row);
+    area.reduce (px (12.0f), 0);
+
+    // Baie du pédalier, puis façade du module ouvert
+    auto bay = area.removeFromTop (px (boardHeight));
+    bayArea = bay.toFloat();
+    pedalBoard.setBounds (bay.reduced (px (4.0f), px (6.0f)));
     pedalBoard.setScale (s);
 
-    // Panneau du module ouvert
-    const auto panel = area.reduced (px (margin), px (12.0f)).withTrimmedBottom (px (8.0f));
+    area.removeFromTop (px (10.0f));
 
     for (auto& card : cards)
     {
-        card->setBounds (panel);
+        card->setBounds (area);
         card->setScale (s);
     }
+
+    for (auto& display : displays)
+        display->setScale (s);
 
     ampFile.setScale (s);
     cabFile.setScale (s);
@@ -389,29 +422,33 @@ void SubdAmpEditor::timerCallback()
     auto& meters = subdAmp.getMeters();
     inputMeter.pushPeak (meters.inputPeak.exchange (0.0f, std::memory_order_relaxed), elapsed);
     outputMeter.pushPeak (meters.outputPeak.exchange (0.0f, std::memory_order_relaxed), elapsed);
+    scope.refresh();
 
     // L'ordre a changé ailleurs (preset, session rechargée) : le pédalier suit l'ordre réel.
     if (const auto order = subdAmp.getChainOrder(); order != shownOrder && ! pedalBoard.isDragging())
     {
         shownOrder = order;
         pedalBoard.setOrder (shownOrder);
+        updateIdentities();
     }
 
     pedalBoard.refreshMixes();
 
-    // Latence affichée : mise à jour quand elle change de façon visible.
+    // Latence et charge : lissage de la charge pour une lecture stable, comme un vrai afficheur.
+    smoothedCpu += 0.1 * (subdAmp.getCpuLoad() - smoothedCpu);
     const auto latency = subdAmp.getLatencyStatus();
 
     if (latency.tier != shownLatency.tier || latency.texturesActive != shownLatency.texturesActive
-        || std::abs (latency.milliseconds - shownLatency.milliseconds) >= 0.5
+        || std::abs (latency.milliseconds - shownLatency.milliseconds) >= 0.05
         || std::abs (latency.textureMilliseconds - shownLatency.textureMilliseconds) >= 0.5)
-    {
         shownLatency = latency;
-        repaint (getLocalBounds().withHeight (juce::roundToInt (headerHeight * scale())));
-    }
 
-    cardFor (subdAmp.openModule).refreshLatency();
-    cardFor (subdAmp.openModule).refreshLamps();
+    updateReadouts();
+
+    auto& card = cardFor (subdAmp.openModule);
+    card.refreshLatency();
+    card.refreshLamps();
+    displays[indexOf (subdAmp.openModule)]->refresh();
 }
 
 } // namespace subdamp::gui

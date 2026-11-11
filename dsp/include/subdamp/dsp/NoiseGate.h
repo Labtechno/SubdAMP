@@ -30,6 +30,9 @@ public:
     /** Ouverture actuelle, de 0 (fermé) à 1 (ouvert) : suit l'attaque puis la relâche. */
     float getOpening() const noexcept { return gain; }
 
+    /** Niveau vu par le détecteur (linéaire), à comparer aux seuils d'ouverture et de fermeture. */
+    float getDetectorLevel() const noexcept { return envelope; }
+
 private:
     float coefficientFor (double milliseconds) const noexcept;
 

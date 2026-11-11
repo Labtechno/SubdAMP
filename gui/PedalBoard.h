@@ -20,8 +20,9 @@ namespace subdamp::gui
       - clic maintenu et glissé : la pédale se déplace, les autres s'écartent pour montrer où
         elle va tomber ; au relâchement, la chaîne prend ce nouvel ordre.
 
-    La couleur du haut de la pédale indique la catégorie de latence (vert LIVE, orange
-    JOUABLE, violet TEXTURE) ; le MIX s'affiche sous le nom quand il n'est pas à 100 %.
+    Chaque module est une plaque vissée : bande de couleur de sa catégorie de latence (vert
+    LIVE, orange JOUABLE, bleu acier TEXTURE), référence, nom, MIX quand il n'est pas à 100 %,
+    témoin de marche. Un câble les relie dans l'ordre du signal.
 */
 class PedalBoard final : public juce::Component
 {
@@ -43,10 +44,10 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
-    static constexpr int pedalWidth = 72;
-    static constexpr int pedalHeight = 112;
+    static constexpr int pedalWidth = 80;
+    static constexpr int pedalHeight = 130;
     static constexpr int gap = 12;
-    static constexpr int hintHeight = 22;
+    static constexpr int hintHeight = 20;
 
 private:
     class Pedal;

@@ -1,5 +1,6 @@
 #include "subdamp/dsp/Biquad.h"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -74,6 +75,22 @@ BiquadCoefficients BiquadCoefficients::lowShelf (double sampleRate, double frequ
 BiquadCoefficients BiquadCoefficients::highShelf (double sampleRate, double frequency, double gainDb)
 {
     return shelf (sampleRate, frequency, gainDb, false);
+}
+
+double BiquadCoefficients::magnitudeDecibels (double frequency, double sampleRate) const noexcept
+{
+    // |H(e^jw)| = |b0 + b1 z^-1 + b2 z^-2| / |1 + a1 z^-1 + a2 z^-2|, z = e^jw
+    const auto w = 2.0 * std::numbers::pi * frequency / sampleRate;
+    const auto c1 = std::cos (w), s1 = std::sin (w), c2 = std::cos (2.0 * w), s2 = std::sin (2.0 * w);
+
+    const auto numeratorRe = b0 + b1 * c1 + b2 * c2;
+    const auto numeratorIm = -(b1 * s1 + b2 * s2);
+    const auto denominatorRe = 1.0 + a1 * c1 + a2 * c2;
+    const auto denominatorIm = -(a1 * s1 + a2 * s2);
+
+    const auto power = (numeratorRe * numeratorRe + numeratorIm * numeratorIm)
+                     / std::max (1.0e-30, denominatorRe * denominatorRe + denominatorIm * denominatorIm);
+    return 10.0 * std::log10 (std::max (1.0e-30, power));
 }
 
 } // namespace subdamp::dsp

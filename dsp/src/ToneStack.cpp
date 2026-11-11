@@ -38,9 +38,17 @@ void ToneStack::updateCoefficients() noexcept
         return;
 
     needsUpdate = false;
-    bass.setCoefficients (BiquadCoefficients::lowShelf (sampleRate, 120.0, bassDb));
-    mid.setCoefficients (BiquadCoefficients::peak (sampleRate, 750.0, 0.8, midDb));
-    treble.setCoefficients (BiquadCoefficients::highShelf (sampleRate, 3000.0, trebleDb));
+    const auto coefficients = coefficientsFor (sampleRate, bassDb, midDb, trebleDb);
+    bass.setCoefficients (coefficients[0]);
+    mid.setCoefficients (coefficients[1]);
+    treble.setCoefficients (coefficients[2]);
+}
+
+std::array<BiquadCoefficients, 3> ToneStack::coefficientsFor (double sr, float bassGain, float midGain, float trebleGain) noexcept
+{
+    return { BiquadCoefficients::lowShelf (sr, 120.0, bassGain),
+             BiquadCoefficients::peak (sr, 750.0, 0.8, midGain),
+             BiquadCoefficients::highShelf (sr, 3000.0, trebleGain) };
 }
 
 void ToneStack::process (std::span<float> block) noexcept
@@ -55,18 +63,25 @@ void ToneStack::process (std::span<float> block) noexcept
 //==============================================================================
 void FallbackCabinet::prepare (const ProcessSpec& spec)
 {
-    const auto sr = spec.sampleRate;
-    const auto lowPassHz = std::min (5000.0, sr * 0.45);
+    const auto coefficients = coefficientsFor (spec.sampleRate);
 
-    stages[0].setCoefficients (BiquadCoefficients::highPass (sr, 70.0, butterworthQ));
-    stages[1].setCoefficients (BiquadCoefficients::peak (sr, 110.0, 1.0, 3.0));
-    stages[2].setCoefficients (BiquadCoefficients::peak (sr, 500.0, 0.8, -4.0));
-    stages[3].setCoefficients (BiquadCoefficients::peak (sr, 2500.0, 1.5, 3.0));
-    stages[4].setCoefficients (BiquadCoefficients::lowPass (sr, lowPassHz, butterworth4Q1));
-    stages[5].setCoefficients (BiquadCoefficients::lowPass (sr, lowPassHz, butterworth4Q2));
-    stages[6].setCoefficients (BiquadCoefficients::lowPass (sr, std::min (7500.0, sr * 0.45), butterworthQ));
+    for (std::size_t i = 0; i < stages.size(); ++i)
+        stages[i].setCoefficients (coefficients[i]);
 
     reset();
+}
+
+std::array<BiquadCoefficients, 7> FallbackCabinet::coefficientsFor (double sr) noexcept
+{
+    const auto lowPassHz = std::min (5000.0, sr * 0.45);
+
+    return { BiquadCoefficients::highPass (sr, 70.0, butterworthQ),
+             BiquadCoefficients::peak (sr, 110.0, 1.0, 3.0),
+             BiquadCoefficients::peak (sr, 500.0, 0.8, -4.0),
+             BiquadCoefficients::peak (sr, 2500.0, 1.5, 3.0),
+             BiquadCoefficients::lowPass (sr, lowPassHz, butterworth4Q1),
+             BiquadCoefficients::lowPass (sr, lowPassHz, butterworth4Q2),
+             BiquadCoefficients::lowPass (sr, std::min (7500.0, sr * 0.45), butterworthQ) };
 }
 
 void FallbackCabinet::reset() noexcept

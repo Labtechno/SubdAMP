@@ -42,6 +42,7 @@ private:
     juce::Label nameLabel, detailLabel;
     std::unique_ptr<juce::FileChooser> chooser;
 
+    juce::Rectangle<int> screenArea;
     float scale = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FileSlot)

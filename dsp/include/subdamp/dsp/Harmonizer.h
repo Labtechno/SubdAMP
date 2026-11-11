@@ -56,6 +56,9 @@ public:
 
     // Pour les tests
     bool isTracking() const noexcept { return tracker.isVoiced(); }
+
+    /** Note MIDI suivie (avec hystérésis), ou -1 si aucune note n'est suivie. */
+    int getDetectedNote() const noexcept { return isTracking() ? currentNote : -1; }
     int getVoiceShiftSemitones (int voice) const noexcept;
 
 private:

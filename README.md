@@ -171,5 +171,6 @@ les allocations : toute allocation dans le traitement audio fait échouer les te
 | NeuralAmpModelerCore | MIT | Aucune contrainte. |
 | Eigen (utilisé par NAM) | MPL 2.0 | Aucune contrainte tant que ses fichiers ne sont pas modifiés. |
 | Signalsmith Stretch + Signalsmith Linear | MIT | Aucune contrainte. |
+| Polices Chakra Petch, IBM Plex Mono, DSEG (interface) | SIL OFL 1.1 | Fournir le texte de licence avec le binaire (fait : dossier `licences` des archives) ; ne pas vendre les polices seules. |
 | Catch2 (tests seulement) | BSL-1.0 | Aucune contrainte. |
 | pluginval (CI seulement, non lié) | GPLv3 | Outil de test, n'entre pas dans le plugin. |

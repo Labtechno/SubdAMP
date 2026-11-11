@@ -20,7 +20,7 @@ FileSlot::FileSlot (SubdAmpProcessor& processor, Kind slotKind)
     loadButton.onClick = [this] { chooseFile(); };
     addAndMakeVisible (loadButton);
 
-    clearButton.setButtonText (utf8 ("✕"));
+    clearButton.setButtonText (utf8 ("×"));
     clearButton.setTooltip (kind == Kind::ampModel ? utf8 ("Retirer la capture") : utf8 ("Revenir au cab interne"));
     clearButton.onClick = [this]
     {
@@ -70,7 +70,7 @@ void FileSlot::refresh()
         nameLabel.setText (kind == Kind::ampModel ? utf8 ("Aucune capture") : utf8 ("Cab interne"),
                            juce::dontSendNotification);
 
-    nameLabel.setColour (juce::Label::textColourId, hasFile ? theme::text : theme::textDim);
+    nameLabel.setColour (juce::Label::textColourId, hasFile ? theme::phosphor : theme::phosphor.withAlpha (0.55f));
 
     juce::String detail;
 
@@ -81,7 +81,7 @@ void FileSlot::refresh()
                                         : utf8 ("Simulation 4×12 par filtres");
 
     detailLabel.setText (detail, juce::dontSendNotification);
-    detailLabel.setColour (juce::Label::textColourId, status.hasError ? theme::error : theme::textDim);
+    detailLabel.setColour (juce::Label::textColourId, status.hasError ? theme::alert : theme::phosphor.withAlpha (0.55f));
     detailLabel.setTooltip (status.hasError ? status.message : juce::String());
 
     clearButton.setEnabled (hasFile);
@@ -125,31 +125,35 @@ void FileSlot::setScale (float newScale)
 
 void FileSlot::paint (juce::Graphics& g)
 {
-    g.setColour (theme::background.withAlpha (0.6f));
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f * scale);
+    // Logement de cartouche : fenêtre d'écran pour le nom du fichier, touches à droite.
+    theme::drawScreen (g, screenArea.toFloat(), scale);
+
+    g.setColour (theme::textFaint);
+    g.setFont (theme::monoFont (9.0f * scale));
+    g.drawText (kind == Kind::ampModel ? "CAPTURE .NAM" : "IR .WAV / .AIF", screenArea.toFloat().reduced (8.0f * scale, 5.0f * scale),
+                juce::Justification::topRight, false);
 }
 
 void FileSlot::resized()
 {
     const auto px = [this] (float value) { return juce::roundToInt (value * scale); };
 
-    auto area = getLocalBounds().reduced (px (8.0f), px (6.0f));
-    nameLabel.setFont (juce::FontOptions (13.0f * scale, juce::Font::bold));
-    detailLabel.setFont (juce::FontOptions (11.0f * scale));
+    auto area = getLocalBounds();
+    nameLabel.setFont (theme::monoFont (13.5f * scale));
+    detailLabel.setFont (theme::monoFont (10.5f * scale));
 
-    // Emplacement étroit (carte du cab) : nom en haut sur toute la largeur, boutons dessous.
-    const auto stacked = area.getWidth() < px (240.0f);
-    auto buttons = stacked ? area.removeFromBottom (px (30.0f)) : area.removeFromRight (px (104.0f));
+    auto buttons = area.removeFromRight (px (118.0f));
+    area.removeFromRight (px (8.0f));
+    screenArea = area;
 
-    clearButton.setBounds (buttons.removeFromRight (px (26.0f)).reduced (0, px (stacked ? 2.0f : 6.0f)));
-    buttons.removeFromRight (px (4.0f));
-    loadButton.setBounds (buttons.reduced (0, px (stacked ? 2.0f : 6.0f)));
+    buttons = buttons.withSizeKeepingCentre (buttons.getWidth(), juce::jmin (buttons.getHeight(), px (34.0f)));
+    clearButton.setBounds (buttons.removeFromRight (px (34.0f)));
+    buttons.removeFromRight (px (6.0f));
+    loadButton.setBounds (buttons);
 
-    if (! stacked)
-        area.removeFromRight (px (6.0f));
-
-    nameLabel.setBounds (area.removeFromTop (area.getHeight() / 2));
-    detailLabel.setBounds (area);
+    auto text = area.reduced (px (10.0f), px (6.0f));
+    nameLabel.setBounds (text.removeFromTop (text.getHeight() / 2).translated (0, px (2.0f)));
+    detailLabel.setBounds (text);
 }
 
 } // namespace subdamp::gui

@@ -3,6 +3,7 @@
 #include "plugin/CabSection.h"
 #include "plugin/Modules.h"
 #include "plugin/Parameters.h"
+#include "plugin/ScopeTap.h"
 #include "subdamp/dsp/AmpSection.h"
 #include "subdamp/dsp/BypassCrossfade.h"
 #include "subdamp/dsp/ChainSlot.h"
@@ -38,6 +39,22 @@ struct LevelMeters
     std::atomic<float> outputPeak { 0.0f };
 
     static_assert (std::atomic<float>::is_always_lock_free);
+};
+
+/**
+    Mesures publiées par le thread audio pour les écrans de l'interface : uniquement des valeurs
+    réelles, lues sans verrou. Le thread audio écrit, l'interface lit.
+*/
+struct Telemetry
+{
+    std::atomic<float> gateLevel { 0.0f };        // niveau vu par le détecteur du GATE (linéaire)
+    std::atomic<float> gateCutting { 0.0f };      // 0 : le son passe (ou GATE arrêté), 1 : il coupe
+    std::atomic<float> whammySemitones { 0.0f };  // transposition en cours du WHAMMY
+    std::atomic<int> harmonyNote { -1 };          // note suivie par l'HARMONIZER (MIDI), -1 : aucune
+    std::atomic<int> harmonyShift1 { 0 }, harmonyShift2 { 0 }; // décalage des voix, en demi-tons
+    std::atomic<bool> freezeHeld { false };       // nappe figée en train de sonner
+
+    static_assert (std::atomic<float>::is_always_lock_free && std::atomic<int>::is_always_lock_free);
 };
 
 /** État d'un fichier chargé (capture d'ampli ou IR), pour l'interface. */
@@ -149,7 +166,14 @@ public:
     float getModuleMix (ModuleId module) const noexcept;
 
     /** Coupure du GATE, pour son voyant : 0 (le son passe, ou gate arrêté) à 1 (il coupe). */
-    float getGateCutting() const noexcept { return gateCutting.load (std::memory_order_relaxed); }
+    float getGateCutting() const noexcept { return telemetry.gateCutting.load (std::memory_order_relaxed); }
+
+    /** Mesures pour les écrans (thread de l'interface). */
+    const Telemetry& getTelemetry() const noexcept { return telemetry; }
+    const ScopeTap& getScope() const noexcept { return scope; }
+
+    /** Charge du traitement audio : durée de calcul / durée du bloc (0 à 1). */
+    double getCpuLoad() const noexcept { return loadMeasurer.getLoadAsProportion(); }
 
     /** Retard propre à un module, en millisecondes. */
     double getModuleLatencyMs (ModuleId module) const noexcept;
@@ -171,6 +195,7 @@ private:
 
     void processChunk (float* left, float* right, int numSamples) noexcept;
     void updateChainOrder() noexcept;
+    void publishTelemetry() noexcept;
     void updateTransport() noexcept;
     void updateTargetsFromParameters() noexcept;
     void restoreFilesFromState();
@@ -292,7 +317,9 @@ private:
     std::atomic<double> preparedSampleRate { 0.0 }; // lu par l'interface pour convertir les latences
 
     LevelMeters meters;
-    std::atomic<float> gateCutting { 0.0f };
+    Telemetry telemetry;
+    ScopeTap scope;
+    juce::AudioProcessLoadMeasurer loadMeasurer;
 
     //==============================================================================
     // Fichiers

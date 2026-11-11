@@ -45,17 +45,31 @@ juce_add_plugin(SubdAmp
     MICROPHONE_PERMISSION_TEXT    "SubdAmp a besoin de l'entrée audio pour traiter le signal de ta guitare."
     COPY_PLUGIN_AFTER_BUILD       FALSE)
 
+# Polices de l'interface (licence SIL OFL 1.1, textes dans assets/fonts) : intégrées au binaire.
+juce_add_binary_data(SubdAmpAssets
+    HEADER_NAME SubdAmpAssets.h
+    NAMESPACE   SubdAmpAssets
+    SOURCES
+        assets/fonts/ChakraPetch-SemiBold.ttf
+        assets/fonts/ChakraPetch-Medium.ttf
+        assets/fonts/IBMPlexMono-Medium.ttf
+        assets/fonts/DSEG7Classic-Bold.ttf
+        assets/fonts/DSEG14Classic-Bold.ttf)
+
 target_sources(SubdAmp
     PRIVATE
         plugin/CabSection.cpp
         plugin/Parameters.cpp
         plugin/PluginProcessor.cpp
         plugin/StateVersioning.cpp
+        gui/Displays.cpp
         gui/FileSlot.cpp
+        gui/LabLookAndFeel.cpp
         gui/LevelMeter.cpp
         gui/ModuleCard.cpp
         gui/PedalBoard.cpp
         gui/PluginEditor.cpp
+        gui/Theme.cpp
         standalone/AudioSettingsPanel.cpp
         standalone/StandaloneApp.cpp
         standalone/StandaloneHost.cpp)
@@ -79,6 +93,7 @@ target_compile_definitions(SubdAmp
 target_link_libraries(SubdAmp
     PRIVATE
         subdamp_dsp
+        SubdAmpAssets
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC

@@ -85,3 +85,27 @@ TEST_CASE ("Le cabinet de secours coupe l'extrême grave et l'aigu", "[cabinet]"
     REQUIRE (measure (30.0) < mid * 0.3);
     REQUIRE (measure (12000.0) < mid * 0.05);
 }
+
+TEST_CASE ("Biquad : la courbe calculée (écrans de l'interface) correspond au filtre", "[filter]")
+{
+    constexpr double rate = 48000.0;
+
+    // Cloche de +6 dB à 750 Hz : +6 dB au centre, quasi rien loin de lui.
+    const auto peak = BiquadCoefficients::peak (rate, 750.0, 0.8, 6.0);
+    REQUIRE (peak.magnitudeDecibels (750.0, rate) == Catch::Approx (6.0).margin (0.01));
+    REQUIRE (std::abs (peak.magnitudeDecibels (20.0, rate)) < 0.1);
+
+    // Passe-bas de Butterworth : -3 dB à la coupure ; et la mesure sur un vrai signal concorde.
+    const auto lowPass = BiquadCoefficients::lowPass (rate, 2000.0, butterworthQ);
+    REQUIRE (lowPass.magnitudeDecibels (2000.0, rate) == Catch::Approx (-3.01).margin (0.05));
+
+    Biquad filter;
+    filter.setCoefficients (lowPass);
+    auto signal = subdamp::test::sine (5000.0, rate, 48000, 0.5f);
+
+    for (auto& s : signal)
+        s = filter.processSample (s);
+
+    const auto measured = 20.0 * std::log10 (subdamp::test::rms (std::span<const float> { signal }.subspan (24000)) / (0.5 / std::sqrt (2.0)));
+    REQUIRE (measured == Catch::Approx (lowPass.magnitudeDecibels (5000.0, rate)).margin (0.1));
+}

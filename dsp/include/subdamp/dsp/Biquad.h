@@ -15,6 +15,9 @@ struct BiquadCoefficients
     static BiquadCoefficients peak (double sampleRate, double frequency, double q, double gainDb);
     static BiquadCoefficients lowShelf (double sampleRate, double frequency, double gainDb);
     static BiquadCoefficients highShelf (double sampleRate, double frequency, double gainDb);
+
+    /** Gain du filtre à une fréquence, en dB (pour tracer sa vraie courbe dans l'interface). */
+    double magnitudeDecibels (double frequency, double sampleRate) const noexcept;
 };
 
 /** Ordre 2 pour un filtre Butterworth (Q = 1/√2), et les deux étages d'un Butterworth d'ordre 4. */

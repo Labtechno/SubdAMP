@@ -27,16 +27,12 @@ namespace
     constexpr float injection = 0.5f;
     constexpr float outputGain = 0.3f;
 
-    // Les aigus (au-dessus de TONE) décroissent deux fois plus vite que les graves.
-    constexpr double highDecayRatio = 0.5;
-
     // Gain d'énergie de la réverbe, de l'entrée à la somme mono, pour une ligne moyenne :
     //   Γ ≈ outputGain² · 4/8 · 2 · (injection · inputScale)² · 8 / (1 − g²) ≈ 0,09 · s² / (1 − g²)
     // La normalisation inputScale le rend à peu près constant pour les graves : 0,09 / 0,292.
     // Au maximum, chaque génération transposée garde 80 % de l'énergie de la précédente.
-    constexpr float maxEnergyPerGeneration = 0.8f;
     constexpr float reverbEnergyGain = 0.09f / 0.292f;
-    const float loopGain = std::sqrt (maxEnergyPerGeneration / reverbEnergyGain);
+    const float loopGain = std::sqrt (ShimmerReverb::energyPerGenerationAtMaximum / reverbEnergyGain);
 
     constexpr double inputHighPassHz = 50.0;
     constexpr double loopHighPassHz = 150.0;
@@ -166,7 +162,7 @@ void ShimmerReverb::updateDecayGains() noexcept
     // Gain par passage pour perdre 60 dB en decaySeconds : 10^(-3 · longueur / (T60 · fe)).
     // Les aigus ont leur propre gain, pour un T60 plus court (amortissement à deux bandes).
     double sumOfSquares = 0.0;
-    const auto highDecaySeconds = std::max (0.25, decaySeconds * highDecayRatio);
+    const auto highDecaySeconds = std::max (0.25, decaySeconds * ShimmerReverb::highDecayRatio);
 
     for (auto& line : lines)
     {

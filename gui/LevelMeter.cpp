@@ -37,32 +37,36 @@ float LevelMeter::proportionForDecibels (float decibels) const noexcept
 
 void LevelMeter::paint (juce::Graphics& g)
 {
+    // Échelle de témoins, comme sur une console : vert, ambre au-dessus de -18 dB, rouge au-dessus
+    // de -6 dB. Les témoins éteints restent visibles, en verre teinté.
     auto area = getLocalBounds().toFloat();
-    const auto corner = area.getWidth() * 0.3f;
+    const auto unit = area.getWidth() / 12.0f;
+    theme::drawRecess (g, area, unit, 0.0f);
+    area = area.reduced (2.0f * unit);
 
-    g.setColour (theme::meterBackground);
-    g.fillRoundedRectangle (area, corner);
+    const auto clipArea = area.removeFromTop (area.getWidth());
+    theme::drawLed (g, clipArea, theme::alert, clipHoldRemaining > 0.0 ? 1.0f : 0.0f, unit);
+    area.removeFromTop (3.0f * unit);
 
-    auto clipArea = area.removeFromTop (area.getHeight() * 0.06f);
-    area.removeFromTop (2.0f);
+    constexpr int segments = 30;
+    const auto pitch = area.getHeight() / static_cast<float> (segments);
 
-    // Zone de niveau, avec les seuils -18 dB (orange) et -6 dB (rouge) en couleur fixe.
-    const auto levelHeight = area.getHeight() * proportionForDecibels (displayedDb);
-    const auto level = area.withTop (area.getBottom() - levelHeight);
+    for (int i = 0; i < segments; ++i)
+    {
+        const auto segmentDb = juce::jmap (static_cast<float> (i) + 0.5f, 0.0f, static_cast<float> (segments), minDb, maxDb);
+        const auto colour = segmentDb > -6.0f ? theme::alert : (segmentDb > -18.0f ? theme::amber : theme::medical);
+        const auto isLit = displayedDb >= segmentDb;
+        const auto segment = juce::Rectangle<float> (area.getX(), area.getBottom() - pitch * static_cast<float> (i + 1),
+                                                     area.getWidth(), pitch).reduced (0.0f, juce::jmax (0.6f, pitch * 0.18f));
 
-    juce::ColourGradient gradient (theme::meterLow, area.getBottomLeft(), theme::meterHigh, area.getTopLeft(), false);
-    gradient.addColour (proportionForDecibels (-18.0f), theme::meterLow);
-    gradient.addColour (proportionForDecibels (-6.0f), theme::meterMid);
-    g.setGradientFill (gradient);
-    g.fillRoundedRectangle (level, corner);
+        g.setColour (isLit ? colour : colour.withAlpha (0.1f));
+        g.fillRect (segment);
+    }
 
     // Repère 0 dBFS
     const auto zeroY = area.getBottom() - area.getHeight() * proportionForDecibels (0.0f);
-    g.setColour (theme::textDim);
-    g.drawHorizontalLine (juce::roundToInt (zeroY), area.getX(), area.getRight());
-
-    g.setColour (clipHoldRemaining > 0.0 ? theme::meterHigh : theme::meterBackground.brighter (0.15f));
-    g.fillRoundedRectangle (clipArea, corner);
+    g.setColour (theme::text.withAlpha (0.7f));
+    g.fillRect (area.getX() - 1.0f * unit, zeroY - 0.5f, area.getWidth() + 2.0f * unit, 1.0f);
 }
 
 } // namespace subdamp::gui

@@ -18,7 +18,7 @@ public:
           info (moduleInfo),
           mixValue (moduleInfo.mixParameter != nullptr ? parameters.getRawParameterValue (moduleInfo.mixParameter) : nullptr)
     {
-        setTooltip (juce::String::fromUTF8 ("Clic : réglages — glisser : changer de place — LED : marche / arrêt"));
+        setTooltip (juce::String::fromUTF8 ("Clic : réglages — glisser : changer de place — témoin : marche / arrêt"));
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
 
         led.setTooltip (juce::String::fromUTF8 ("Marche / arrêt"));
@@ -60,60 +60,74 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        const auto isOn = led.getToggleState();
-        auto body = getLocalBounds().toFloat().reduced (2.0f * scale);
-        const auto corner = 9.0f * scale;
+        using namespace theme;
 
-        // Pédale soulevée : ombre portée.
+        const auto isOn = led.getToggleState();
+        auto body = getLocalBounds().toFloat().reduced (3.0f * scale);
+        const auto chamfer = 5.0f * scale;
+
+        // Module soulevé : ombre portée plus large
         if (lifted)
         {
-            g.setColour (juce::Colours::black.withAlpha (0.45f));
-            g.fillRoundedRectangle (body.translated (0.0f, 5.0f * scale), corner);
+            g.setColour (juce::Colours::black.withAlpha (0.55f));
+            g.fillPath (chamfered (body.translated (0.0f, 6.0f * scale).expanded (2.0f * scale), chamfer));
         }
 
-        if (selected)
-        {
-            g.setColour (theme::accent.withAlpha (0.18f));
-            g.fillRoundedRectangle (body.expanded (2.0f * scale), corner + 2.0f * scale);
-        }
+        drawPlate (g, body, scale, isOn ? plateRaised : plate, chamfer);
 
-        g.setColour (isOn ? theme::panelRaised : theme::panel);
-        g.fillRoundedRectangle (body, corner);
+        // Bande de la catégorie de latence, en haut
+        const auto tierColour = colourFor (info.tier);
+        g.setColour (isOn ? tierColour : tierColour.withAlpha (0.3f));
+        g.fillRect (body.reduced (6.0f * scale, 0.0f).withHeight (3.0f * scale).translated (0.0f, 5.0f * scale));
 
-        // Bande de couleur de la catégorie de latence
-        const auto tierColour = theme::colourFor (info.tier);
-        g.setColour (isOn ? tierColour : tierColour.withAlpha (0.35f));
-        g.fillRoundedRectangle (body.withHeight (6.0f * scale), 3.0f * scale);
+        // Vis
+        for (const auto x : { body.getX() + 8.0f * scale, body.getRight() - 8.0f * scale })
+            for (const auto y : { body.getY() + 16.0f * scale, body.getBottom() - 9.0f * scale })
+                drawScrew (g, { x, y }, 2.4f * scale, x * 0.05f);
 
-        g.setColour (selected || lifted ? theme::accent : theme::panelOutline.brighter (isOn ? 0.25f : 0.0f));
-        g.drawRoundedRectangle (body, corner, (selected || lifted ? 2.0f : 1.0f) * scale);
+        // Référence, nom, MIX
+        g.setColour (textFaint);
+        g.setFont (monoFont (8.5f * scale));
+        g.drawText (info.code, body.withTrimmedTop (12.0f * scale).withHeight (10.0f * scale), juce::Justification::centred, false);
 
-        // Nom
-        g.setColour (isOn ? theme::text : theme::textDim);
-        g.setFont (juce::FontOptions (12.5f * scale, juce::Font::bold));
-        g.drawFittedText (info.pedalName, body.withTrimmedTop (12.0f * scale).withHeight (22.0f * scale).toNearestInt(),
+        g.setColour (isOn ? text : textDim);
+        g.setFont (titleFont (14.0f * scale));
+        g.drawFittedText (info.pedalName, body.withTrimmedTop (24.0f * scale).withHeight (20.0f * scale).reduced (4.0f * scale, 0.0f).toNearestInt(),
                           juce::Justification::centred, 1, 0.8f);
 
-        // MIX, seulement quand il n'est pas à fond : on repère d'un coup d'œil les effets dosés.
         if (shownMix < 0.995f)
         {
-            g.setColour ((isOn ? theme::accent : theme::textDim).withAlpha (isOn ? 0.9f : 0.6f));
-            g.setFont (juce::FontOptions (10.5f * scale, juce::Font::bold));
-            g.drawText ("MIX " + juce::String (juce::roundToInt (shownMix * 100.0f)) + " %",
-                        body.withTrimmedTop (33.0f * scale).withHeight (14.0f * scale), juce::Justification::centred);
+            g.setColour (isOn ? amber : textFaint);
+            g.setFont (monoFont (10.0f * scale));
+            g.drawText ("MIX " + juce::String (juce::roundToInt (shownMix * 100.0f)), body.withTrimmedTop (45.0f * scale).withHeight (13.0f * scale),
+                        juce::Justification::centred, false);
         }
 
-        // Vis de façade, pour l'esprit « boîtier »
-        g.setColour (theme::background.withAlpha (0.7f));
+        // Sélection : équerres de repérage aux quatre coins
+        if (selected || lifted)
+        {
+            const auto frame = body.expanded (2.0f * scale);
+            const auto arm = 10.0f * scale;
+            juce::Path marks;
 
-        for (const auto x : { body.getX() + 9.0f * scale, body.getRight() - 9.0f * scale })
-            g.fillEllipse (juce::Rectangle<float> (4.0f * scale, 4.0f * scale).withCentre ({ x, body.getBottom() - 9.0f * scale }));
+            for (const auto corner : { frame.getTopLeft(), frame.getTopRight(), frame.getBottomLeft(), frame.getBottomRight() })
+            {
+                const auto dx = corner.x < frame.getCentreX() ? arm : -arm;
+                const auto dy = corner.y < frame.getCentreY() ? arm : -arm;
+                marks.startNewSubPath (corner.x + dx, corner.y);
+                marks.lineTo (corner);
+                marks.lineTo (corner.x, corner.y + dy);
+            }
+
+            g.setColour (amber);
+            g.strokePath (marks, juce::PathStrokeType (2.0f * scale, juce::PathStrokeType::mitered, juce::PathStrokeType::square));
+        }
     }
 
     void resized() override
     {
-        const auto size = juce::roundToInt (26.0f * scale);
-        led.setBounds (getLocalBounds().withSizeKeepingCentre (size, size).withY (getHeight() - size - juce::roundToInt (18.0f * scale)));
+        const auto size = juce::roundToInt (30.0f * scale);
+        led.setBounds (getLocalBounds().withSizeKeepingCentre (size, size).withY (getHeight() - size - juce::roundToInt (22.0f * scale)));
     }
 
     void mouseDown (const juce::MouseEvent&) override
@@ -318,45 +332,77 @@ void PedalBoard::endDrag()
 //==============================================================================
 void PedalBoard::paint (juce::Graphics& g)
 {
+    using namespace theme;
+
     const auto first = slotBounds (0);
     const auto last = slotBounds (numModules - 1);
-    const auto cableY = static_cast<float> (first.getCentreY());
+    const auto cableY = static_cast<float> (first.getY()) + 74.0f * scale;
 
-    // Câble d'un bout à l'autre, chevron entre deux pédales : le sens du signal.
-    g.setColour (theme::panelOutline.brighter (0.2f));
-    g.drawLine (0.0f, cableY, static_cast<float> (getWidth()), cableY, 2.0f * scale);
-
-    for (std::size_t i = 1; i < numModules; ++i)
+    // Câble de liaison, de l'entrée à la sortie, et sens du signal
+    const auto drawCable = [&] (float x0, float x1)
     {
-        const auto x = (static_cast<float> (slotBounds (i - 1).getRight()) + static_cast<float> (slotBounds (i).getX())) * 0.5f;
-        juce::Path chevron;
-        chevron.startNewSubPath (x - 2.5f * scale, cableY - 4.5f * scale);
-        chevron.lineTo (x + 2.5f * scale, cableY);
-        chevron.lineTo (x - 2.5f * scale, cableY + 4.5f * scale);
-        g.setColour (theme::accent.withAlpha (0.8f));
-        g.strokePath (chevron, juce::PathStrokeType (2.0f * scale, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+        g.setColour (seam);
+        g.drawLine (x0, cableY, x1, cableY, 6.0f * scale);
+        g.setColour (metalDark);
+        g.drawLine (x0, cableY - 0.5f * scale, x1, cableY - 0.5f * scale, 3.5f * scale);
+        g.setColour (juce::Colours::white.withAlpha (0.08f));
+        g.drawLine (x0, cableY - 1.5f * scale, x1, cableY - 1.5f * scale, 1.0f * scale);
+    };
+
+    drawCable (0.0f, static_cast<float> (getWidth()));
+
+    for (std::size_t i = 0; i <= numModules; ++i)
+    {
+        // Jacks de part et d'autre de chaque module
+        if (i < numModules)
+        {
+            const auto slot = slotBounds (i).toFloat();
+
+            for (const auto x : { slot.getX() - 3.0f * scale, slot.getRight() - 3.0f * scale })
+            {
+                const auto jack = juce::Rectangle<float> (x, cableY - 5.0f * scale, 6.0f * scale, 10.0f * scale);
+                g.setColour (metalMid);
+                g.fillRect (jack);
+                g.setColour (seam);
+                g.drawRect (jack, 1.0f * scale);
+            }
+        }
+
+        if (i > 0 && i < numModules)
+        {
+            const auto x = (static_cast<float> (slotBounds (i - 1).getRight()) + static_cast<float> (slotBounds (i).getX())) * 0.5f;
+            juce::Path arrow;
+            arrow.addTriangle (x - 2.5f * scale, cableY - 8.5f * scale, x - 2.5f * scale, cableY - 15.5f * scale, x + 3.0f * scale, cableY - 12.0f * scale);
+            g.setColour (amber.withAlpha (0.85f));
+            g.fillPath (arrow);
+        }
     }
+
+    g.setColour (textDim);
+    g.setFont (labelFont (11.0f * scale));
+    g.drawText ("IN", juce::Rectangle<float> (0.0f, cableY - 22.0f * scale, static_cast<float> (first.getX()) - 4.0f * scale, 12.0f * scale),
+                juce::Justification::centredRight, false);
+    g.drawText ("OUT", juce::Rectangle<float> (static_cast<float> (last.getRight()) + 4.0f * scale, cableY - 22.0f * scale, 40.0f * scale, 12.0f * scale),
+                juce::Justification::centredLeft, false);
 
     // Case de destination pendant un glisser
     if (dragged.has_value())
     {
-        const auto target = slotBounds (dropIndex).toFloat().reduced (2.0f * scale);
-        g.setColour (theme::background);
-        g.fillRoundedRectangle (target, 9.0f * scale);
+        const auto target = slotBounds (dropIndex).toFloat().reduced (3.0f * scale);
+        g.setColour (seam);
+        g.fillPath (chamfered (target, 5.0f * scale));
 
-        juce::Path outline;
-        outline.addRoundedRectangle (target, 9.0f * scale);
         juce::Path dashed;
         const float dashes[] { 6.0f * scale, 4.0f * scale };
-        juce::PathStrokeType (1.5f * scale).createDashedStroke (dashed, outline, dashes, 2);
-        g.setColour (theme::accent.withAlpha (0.8f));
+        juce::PathStrokeType (1.5f * scale).createDashedStroke (dashed, chamfered (target, 5.0f * scale), dashes, 2);
+        g.setColour (amber.withAlpha (0.8f));
         g.fillPath (dashed);
     }
 
     // Aide, sous la rangée
-    g.setColour (theme::textDim.withAlpha (0.8f));
-    g.setFont (juce::FontOptions (11.5f * scale));
-    g.drawText (juce::String::fromUTF8 ("Clic : réglages   ·   Glisser une pédale : changer l'ordre de la chaîne   ·   LED : marche / arrêt"),
+    g.setColour (textFaint);
+    g.setFont (monoFont (10.5f * scale));
+    g.drawText (juce::String::fromUTF8 ("CLIC : RÉGLAGES   ·   GLISSER : CHANGER L'ORDRE DE LA CHAÎNE   ·   TÉMOIN : MARCHE / ARRÊT"),
                 juce::Rectangle<int> (first.getX(), last.getBottom() + juce::roundToInt (6.0f * scale),
                                       last.getRight() - first.getX(), juce::roundToInt (static_cast<float> (hintHeight) * scale)),
                 juce::Justification::centred);

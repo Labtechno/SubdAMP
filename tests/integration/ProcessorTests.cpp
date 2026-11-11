@@ -659,6 +659,23 @@ TEST_CASE ("Capture d'écran de l'interface avec une capture et une IR chargées
 
         processor->editorBeingDeleted (editor.get());
     }
+
+    // Tailles extrêmes autorisées par la fenêtre : 60 % et 150 %.
+    processor->openModule = ModuleId::harmonizer;
+
+    for (const auto percent : { 60, 150 })
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor->createEditorAndMakeActive());
+        editor->setSize (1280 * percent / 100, 720 * percent / 100);
+
+        const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+        const auto file = juce::File (folder).getChildFile ("subdamp-taille-" + juce::String (percent) + ".png");
+        file.deleteFile();
+
+        juce::FileOutputStream stream (file);
+        REQUIRE (juce::PNGImageFormat().writeImageToStream (image, stream));
+        processor->editorBeingDeleted (editor.get());
+    }
 }
 
 //==============================================================================
@@ -737,4 +754,27 @@ TEST_CASE ("Glisser une pédale dans le pédalier change l'ordre de la chaîne ;
     REQUIRE (processor->openModule == ModuleId::gate);
 
     processor->editorBeingDeleted (editor.get());
+}
+
+TEST_CASE ("La prise d'oscilloscope rend ce qu'on entend, décimé vers 24 kHz", "[processor]")
+{
+    ScopeTap tap;
+    tap.prepare (48000.0);
+    REQUIRE (tap.getSampleRate() == Catch::Approx (24000.0));
+
+    std::vector<float> left (1000), right (1000);
+
+    for (std::size_t i = 0; i < left.size(); ++i)
+    {
+        left[i] = static_cast<float> (i);
+        right[i] = static_cast<float> (i) + 2.0f;
+    }
+
+    tap.push (left, right);
+
+    // Un échantillon sur deux (indices 993, 995, 997, 999), moyenne gauche / droite (i + 1) ;
+    // les plus récents en dernier.
+    std::vector<float> latest (4);
+    tap.copyLatest (latest);
+    REQUIRE (latest == std::vector<float> { 994.0f, 996.0f, 998.0f, 1000.0f });
 }

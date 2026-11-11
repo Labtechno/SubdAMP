@@ -1,6 +1,7 @@
 // Application standalone de SubdAmp (activée par JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1).
 // Compilée dans le code partagé du plugin, mais seule la cible Standalone l'utilise.
 
+#include "gui/LabLookAndFeel.h"
 #include "gui/Theme.h"
 #include "standalone/AudioSettingsPanel.h"
 #include "standalone/StandaloneHost.h"
@@ -22,11 +23,14 @@ public:
         : host (hostToShow),
           editor (host.getProcessor().createEditorAndMakeActive())
     {
-        settingsButton.setButtonText (juce::String::fromUTF8 ("Réglages audio"));
+        setLookAndFeel (&lookAndFeel);
+
+        settingsButton.setButtonText (juce::String::fromUTF8 ("RÉGLAGES AUDIO"));
         settingsButton.onClick = [this] { openSettings(); };
         addAndMakeVisible (settingsButton);
 
         statusLabel.setColour (juce::Label::textColourId, theme::textDim);
+        statusLabel.setFont (theme::monoFont (12.0f));
         statusLabel.setMinimumHorizontalScale (0.6f);
         addAndMakeVisible (statusLabel);
 
@@ -55,13 +59,18 @@ public:
         // Protocole JUCE : le processeur doit être prévenu avant la destruction de son interface.
         host.getProcessor().editorBeingDeleted (editor.get());
         editor = nullptr;
+
+        settingsWindow = nullptr;
+        setLookAndFeel (nullptr);
     }
 
     void paint (juce::Graphics& g) override
     {
-        g.setColour (theme::panel);
-        g.fillRect (getLocalBounds().removeFromTop (barHeight));
-        g.setColour (theme::panelOutline);
+        // Barre de la carte son : bandeau métallique, filet gravé dessous.
+        const auto bar = getLocalBounds().removeFromTop (barHeight).toFloat();
+        g.fillAll (theme::graphite);
+        theme::drawPlate (g, bar, 1.0f, theme::anthracite, 0.0f);
+        g.setColour (theme::seam);
         g.drawHorizontalLine (barHeight - 1, 0.0f, static_cast<float> (getWidth()));
     }
 
@@ -102,7 +111,9 @@ private:
         if (settingsWindow == nullptr)
         {
             juce::DialogWindow::LaunchOptions options;
-            options.content.setOwned (new AudioSettingsPanel (host));
+            auto* panel = new AudioSettingsPanel (host);
+            panel->setLookAndFeel (&lookAndFeel);
+            options.content.setOwned (panel);
             options.dialogTitle = juce::String::fromUTF8 ("Réglages audio");
             options.dialogBackgroundColour = theme::background;
             options.escapeKeyTriggersCloseButton = true;
@@ -117,6 +128,8 @@ private:
     }
 
     StandaloneHost& host;
+    theme::SharedResources resources;
+    gui::LabLookAndFeel lookAndFeel;
     std::unique_ptr<juce::AudioProcessorEditor> editor;
     juce::TextButton settingsButton;
     juce::Label statusLabel;

@@ -84,8 +84,11 @@ jobs:
         run: |
           ARTEFACTS="build/SubdAmp_artefacts/Release"
           ARCHIVE="SubdAmp-$RUNNER_OS.zip"
-          mkdir -p dist
+          mkdir -p dist/licences
           cp -R "$ARTEFACTS/VST3/SubdAmp.vst3" dist/
+
+          # Polices intégrées à l'interface (SIL OFL 1.1) : leur licence voyage avec le binaire.
+          cp assets/fonts/OFL-*.txt dist/licences/
 
           # On zippe nous-mêmes : upload-artifact ne conserve pas les droits d'exécution.
           case "$RUNNER_OS" in
