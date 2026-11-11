@@ -244,3 +244,122 @@ TEST_CASE ("HARMONIZER : le réglage de formants déplace le timbre, pas la haut
     const std::vector<float> brightSteady (bright.begin() + 24000, bright.end());
     REQUIRE (std::abs (cents (trackedFrequency (brightSteady, 48000.0), 220.0)) < 5.0);
 }
+
+//==============================================================================
+namespace
+{
+    /** Phrase en legato : chaque corde est pincée quand la précédente s'arrête (étouffée). */
+    std::vector<float> legatoPhrase (const std::vector<int>& delays, double sampleRate, double noteSeconds, float level)
+    {
+        const auto noteLength = static_cast<std::size_t> (noteSeconds * sampleRate);
+        std::vector<float> phrase;
+
+        for (std::size_t k = 0; k < delays.size(); ++k)
+        {
+            const auto note = pluckedString (delays[k], sampleRate, static_cast<int> (noteLength), level, static_cast<unsigned> (17 + k));
+            phrase.insert (phrase.end(), note.begin(), note.end());
+        }
+
+        return phrase;
+    }
+
+    /** Nombre de chutes brutales (-15 dB en 5 ms) de la voix tant que l'entrée sonne. */
+    int countDropouts (const std::vector<float>& input, const std::vector<float>& voice, double sampleRate)
+    {
+        const auto window = static_cast<std::size_t> (sampleRate * 0.005);
+        double recent = 0.0;
+        bool inDrop = false;
+        int dropouts = 0;
+
+        for (std::size_t start = window * 20; start + window < input.size(); start += window)
+        {
+            const auto in = rms (std::span<const float> { input }.subspan (start, window));
+            const auto out = rms (std::span<const float> { voice }.subspan (start, window));
+            const auto drop = recent > 0.0 && out < recent * 0.18;
+
+            if (drop && ! inDrop)
+                ++dropouts;
+
+            inDrop = drop;
+
+            if (! drop)
+                recent = 0.7 * recent + 0.3 * out;
+
+            if (in < 1.0e-4)
+                recent = 0.0;
+        }
+
+        return dropouts;
+    }
+}
+
+TEST_CASE ("HARMONIZER : la voix ne se coupe pas d'une note à l'autre, quel que soit le niveau de jeu", "[harmonizer]")
+{
+    // Régression : à chaque attaque, le suivi se perdait quelques dizaines de millisecondes
+    // (jusqu'à 110 ms) et les voix se coupaient, surtout à faible et moyen niveau.
+    constexpr double sampleRate = 48000.0;
+    const auto level = GENERATE (0.4f, 0.05f, 0.012f);
+
+    // Mi grave, La, Ré, Sol, Si, Mi aigu, La, Mi
+    const std::vector<int> delays { 582, 436, 326, 244, 194, 145, 218, 291 };
+    const auto input = legatoPhrase (delays, sampleRate, 0.5, level);
+
+    for (const auto twoVoices : { false, true })
+    {
+        Harmonizer harmonizer;
+        harmonizer.prepare ({ sampleRate, blockSize });
+        harmonizer.setVoiceInterval (0, 2);
+        harmonizer.setVoiceInterval (1, twoVoices ? std::optional<int> (4) : std::nullopt);
+        harmonizer.setVoiceLevel (0, 1.0f);
+        harmonizer.setVoiceLevel (1, 1.0f);
+        harmonizer.setDirectLevel (0.0f);
+        harmonizer.reset();
+
+        auto output = input;
+        processInBlocks (harmonizer, output, blockSize);
+
+        INFO ("Niveau " << level << (twoVoices ? ", deux voix" : ", une voix"));
+        REQUIRE (countDropouts (input, output, sampleRate) == 0);
+    }
+}
+
+TEST_CASE ("HARMONIZER : une note douce après une note forte ne prend pas une octave du dessous", "[harmonizer]")
+{
+    constexpr double sampleRate = 48000.0;
+
+    // Do# aigu fort, puis Si doux qui sonne pendant que le Do# s'éteint encore un peu.
+    auto input = pluckedString (172, sampleRate, static_cast<int> (sampleRate * 0.5), 0.4f, 3);
+    const auto soft = pluckedString (194, sampleRate, static_cast<int> (sampleRate * 0.8), 0.04f, 9);
+    const auto softStart = input.size();
+    input.resize (input.size() + soft.size(), 0.0f);
+
+    for (std::size_t i = 0; i < soft.size(); ++i)
+        input[softStart + i] += soft[i];
+
+    Harmonizer harmonizer;
+    harmonizer.prepare ({ sampleRate, blockSize });
+    harmonizer.setVoiceInterval (0, 2);
+    harmonizer.setVoiceLevel (0, 1.0f);
+    harmonizer.reset();
+
+    const auto expectedNote = static_cast<int> (std::lround (69.0 + 12.0 * std::log2 (pluckedStringFrequency (194, sampleRate) / 440.0)));
+    int wrongBlocks = 0, checkedBlocks = 0;
+
+    for (std::size_t start = 0; start + blockSize <= input.size(); start += blockSize)
+    {
+        harmonizer.process (std::span<float> { input.data() + start, static_cast<std::size_t> (blockSize) });
+
+        // Partie tenue de la note douce (après 60 ms d'attaque)
+        if (start > softStart + static_cast<std::size_t> (0.06 * sampleRate))
+        {
+            ++checkedBlocks;
+            const auto note = harmonizer.getDetectedNote();
+
+            if (note >= 0 && note != expectedNote)
+                ++wrongBlocks;
+        }
+    }
+
+    INFO (wrongBlocks << " blocs sur " << checkedBlocks << " avec une autre note que la note jouée");
+    REQUIRE (wrongBlocks <= checkedBlocks / 50); // tolérance : 2 % (quelques millisecondes)
+}

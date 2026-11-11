@@ -19,7 +19,14 @@ namespace subdamp::dsp
          autour de l'estimation (précision de l'ordre du centième de demi-ton).
 
     Le voisement (note tenue ou non) a une hystérésis : la détection ne bascule pas sans
-    arrêt sur une note qui s'éteint ou pendant un bend.
+    arrêt sur une note qui s'éteint ou pendant un bend. Juste après une note perdue (attaque de
+    la note suivante, legato), le seuil reste celui du maintien : le suivi raccroche vite.
+
+    Contre les erreurs d'octave (attaques bruitées, notes qui se chevauchent) :
+      - si l'estimation est un multiple (×2, ×3, ×4) de la période suivie et que cette
+        dernière colle encore au signal, on garde la période courte (la note jouée) ;
+      - un changement de note (plus de 4 %) n'est adopté que s'il se confirme sur deux
+        analyses consécutives (8 ms) ; en attendant, la note en cours est conservée.
 */
 class PitchTracker
 {
@@ -42,11 +49,13 @@ public:
 private:
     void analyse() noexcept;
     float refineAtFullRate (float coarsePeriod) noexcept;
+    int localMinimumNear (int tau) const noexcept;
 
     static constexpr float enterThreshold = 0.2f;   // CMND sous laquelle une note devient détectée
     static constexpr float stayThreshold = 0.35f;   // ... et reste détectée
     static constexpr float firstDipThreshold = 0.15f;
-    static constexpr float silenceRms = 0.001f;     // ≈ -60 dBFS
+    static constexpr float silenceRms = 0.0003f;    // ≈ -70 dBFS : le jeu doux reste suivi
+    static constexpr double reacquireSeconds = 0.25; // après une note perdue, la suivante est acceptée au seuil « stay »
 
     double sampleRate = 48000.0;
     int decimation = 1;
@@ -69,6 +78,14 @@ private:
     bool voiced = false;
     bool hasNewEstimate = false;
     float period = 0.0f;
+
+    // Analyses restantes pendant lesquelles une nouvelle note se raccroche au seuil « stay » :
+    // l'attaque d'une note qui suit est bruitée, elle ne doit pas couper le suivi longtemps.
+    int reacquireFrames = 0, reacquireFramesAfterLoss = 60;
+
+    // Changement de note en attente de confirmation
+    float pendingPeriod = 0.0f;   // pleine résolution ; 0 : rien en attente
+    float lastGoodPeriod = 0.0f;  // dernière période adoptée (même après une perte passagère)
 };
 
 } // namespace subdamp::dsp

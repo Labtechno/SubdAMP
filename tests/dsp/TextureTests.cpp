@@ -311,6 +311,396 @@ TEST_CASE ("SHIMMER : sortie large (gauche et droite décorrélées)", "[shimmer
     REQUIRE (std::abs (correlation (slice (out.left, 0.5, 2.0), slice (out.right, 0.5, 2.0))) < 0.5);
 }
 
+namespace
+{
+    /** Puissance par case d'une FFT de Hann de 65536 points (0,73 Hz par case à 48 kHz). */
+    std::vector<double> powerSpectrum (std::span<const float> signal)
+    {
+        constexpr int size = 65536;
+        Fft fft;
+        fft.prepare (size);
+        std::vector<std::complex<float>> spectrum (size);
+
+        for (std::size_t i = 0; i < spectrum.size(); ++i)
+        {
+            const auto window = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * static_cast<double> (i) / size);
+            spectrum[i] = { i < signal.size() ? static_cast<float> (window * signal[i]) : 0.0f, 0.0f };
+        }
+
+        fft.forward (spectrum.data());
+
+        std::vector<double> power (size / 2);
+
+        for (std::size_t bin = 0; bin < power.size(); ++bin)
+            power[bin] = static_cast<double> (std::norm (spectrum[bin]));
+
+        return power;
+    }
+
+    /** Part de la puissance à moins de `halfWidth` Hz de `frequency`. */
+    double fractionNear (const std::vector<double>& power, double frequency, double halfWidth)
+    {
+        double near = 0.0, total = 0.0;
+
+        for (std::size_t bin = 1; bin < power.size(); ++bin)
+        {
+            const auto f = static_cast<double> (bin) * sr / 65536.0;
+            total += power[bin];
+
+            if (std::abs (f - frequency) <= halfWidth)
+                near += power[bin];
+        }
+
+        return near / total;
+    }
+
+    /** Réglages extrêmes du SHIMMER, appliqués par-dessus la boucle au maximum. */
+    struct ShimmerExtreme
+    {
+        const char* name;
+        std::function<void (ShimmerReverb&)> apply;
+    };
+
+    std::vector<ShimmerExtreme> shimmerExtremes()
+    {
+        return {
+            { "défaut", [] (ShimmerReverb&) {} },
+            { "taille max", [] (ShimmerReverb& r) { r.setSize (1.0f); } },
+            { "taille min", [] (ShimmerReverb& r) { r.setSize (0.0f); } },
+            { "diffusion max", [] (ShimmerReverb& r) { r.setDiffusion (1.0f); } },
+            { "diffusion nulle", [] (ShimmerReverb& r) { r.setDiffusion (0.0f); } },
+            { "modulation max", [] (ShimmerReverb& r) { r.setModulationDepth (1.0f); r.setModulationRate (5.0f); } },
+            { "coupe-bas min", [] (ShimmerReverb& r) { r.setLowCutHz (20.0f); } },
+            { "pré-délai max", [] (ShimmerReverb& r) { r.setPreDelayMs (500.0f); } },
+            { "mono", [] (ShimmerReverb& r) { r.setWidth (0.0f); } },
+            { "double", [] (ShimmerReverb& r) { r.setPitchMode (ShimmerReverb::PitchMode::dual); } },
+            { "tout au maximum", [] (ShimmerReverb& r)
+              {
+                  r.setPitchMode (ShimmerReverb::PitchMode::dual);
+                  r.setSize (1.0f);
+                  r.setDiffusion (1.0f);
+                  r.setModulationDepth (1.0f);
+                  r.setModulationRate (5.0f);
+                  r.setLowCutHz (20.0f);
+                  r.setPreDelayMs (500.0f);
+              } },
+        };
+    }
+}
+
+TEST_CASE ("SHIMMER : chaque réglage poussé à l'extrême, la queue s'éteint toujours", "[shimmer]")
+{
+    for (const auto& extreme : shimmerExtremes())
+    {
+        for (const auto interval : { 12.0f, -12.0f, 7.0f })
+        {
+            ShimmerReverb reverb;
+            reverb.prepare ({ sr, blockSize });
+            reverb.setDecaySeconds (2.0f);
+            reverb.setShimmer (1.0f);
+            reverb.setToneHz (16000.0f);
+            reverb.setInterval (interval);
+            extreme.apply (reverb);
+            reverb.reset();
+
+            auto input = pluckedString (290, sr, static_cast<int> (sr * 14.0), 0.5f); // ≈ 165 Hz
+            std::fill (input.begin() + static_cast<std::ptrdiff_t> (sr), input.end(), 0.0f);
+
+            const auto out = render (reverb, input);
+            const auto playing = rms (slice (out.left, 0.6, 1.5));
+            const auto tail = std::max (rms (slice (out.left, 13.0, 14.0)), rms (slice (out.right, 13.0, 14.0)));
+
+            INFO (extreme.name << ", intervalle " << interval << " : " << db (tail / playing) << " dB après 12 s de silence");
+            REQUIRE (std::all_of (out.left.begin(), out.left.end(), [] (float s) { return std::isfinite (s); }));
+            REQUIRE (tail < playing * 1.0e-3); // -60 dB
+            REQUIRE (peakAbs (out.left) < 1.0);
+            REQUIRE (peakAbs (out.right) < 1.0);
+        }
+    }
+}
+
+TEST_CASE ("SHIMMER : bruit continu au plus long, aucun réglage extrême ne s'emballe", "[shimmer]")
+{
+    for (const auto& extreme : shimmerExtremes())
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setDecaySeconds (30.0f);
+        reverb.setShimmer (1.0f);
+        reverb.setToneHz (16000.0f);
+        extreme.apply (reverb);
+        reverb.reset();
+
+        auto input = noise (static_cast<std::size_t> (sr * 10.0), 0.5f);
+
+        for (auto& s : input)
+            s += 0.1f; // offset continu d'une carte son : le pire cas
+
+        const auto out = render (reverb, input);
+        const auto early = rms (slice (out.left, 2.0, 4.0));
+        const auto late = rms (slice (out.left, 8.0, 10.0));
+
+        INFO (extreme.name << " : " << db (early) << " dB à 2-4 s, " << db (late) << " dB à 8-10 s");
+        REQUIRE (late < 1.5 * early);
+        REQUIRE (peakAbs (out.left) < 1.5);
+        REQUIRE (peakAbs (out.right) < 1.5);
+    }
+}
+
+TEST_CASE ("SHIMMER : la durée réglée ne dépend pas de la taille", "[shimmer]")
+{
+    for (const auto sizeAmount : { 0.0f, 0.5f, 1.0f })
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setDecaySeconds (2.0f);
+        reverb.setShimmer (0.0f);
+        reverb.setSize (sizeAmount);
+        reverb.reset();
+
+        std::vector<float> input (static_cast<std::size_t> (sr * 2.0), 0.0f);
+        const auto burst = noise (static_cast<std::size_t> (sr * 0.05), 0.5f);
+        std::copy (burst.begin(), burst.end(), input.begin());
+
+        const auto out = render (reverb, input);
+        const auto drop = db (rms (slice (out.left, 0.4, 0.5)) / rms (slice (out.left, 1.4, 1.5)));
+
+        INFO ("Taille " << sizeAmount << " : " << drop << " dB en 1 s (T60 de 2 s : 30 dB attendus)");
+        REQUIRE (drop > 22.0);
+        REQUIRE (drop < 38.0);
+    }
+}
+
+TEST_CASE ("SHIMMER : le pré-délai retarde l'arrivée de la réverbe, au même niveau", "[shimmer]")
+{
+    const auto firstArrival = [] (float preDelayMs, double& level)
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setShimmer (0.0f);
+        reverb.setPreDelayMs (preDelayMs);
+        reverb.reset();
+
+        std::vector<float> input (static_cast<std::size_t> (sr * 1.5), 0.0f);
+        input[0] = 1.0f;
+        const auto out = render (reverb, input);
+        level = rms (slice (out.left, 0.0, 1.5));
+
+        for (std::size_t i = 0; i < out.left.size(); ++i)
+            if (std::abs (out.left[i]) > 1.0e-4f)
+                return static_cast<double> (i) * 1000.0 / sr;
+
+        return -1.0;
+    };
+
+    double levelWithout = 0.0, levelWith = 0.0;
+    const auto without = firstArrival (0.0f, levelWithout);
+    const auto with = firstArrival (200.0f, levelWith);
+
+    INFO ("Première arrivée : " << without << " ms sans pré-délai, " << with << " ms avec 200 ms");
+    REQUIRE (with - without == Catch::Approx (200.0).margin (0.1));
+    REQUIRE (levelWith == Catch::Approx (levelWithout).epsilon (0.02));
+}
+
+TEST_CASE ("SHIMMER : changer le pré-délai en jouant passe par un fondu, sans saut", "[shimmer]")
+{
+    // Une sinusoïde grave et une réverbe très diffuse : la sortie est lisse. Un changement de
+    // lecture brutal y laisserait une marche ; le fondu enchaîné ne doit pas en laisser.
+    const auto largestStep = [] (bool moving)
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setShimmer (0.0f);
+        reverb.setToneHz (2000.0f);
+        reverb.reset();
+
+        const auto input = sine (110.0, sr, static_cast<int> (sr * 3.0), 0.5f);
+        Stereo out { std::vector<float> (input.size()), std::vector<float> (input.size()) };
+
+        for (std::size_t start = 0, block = 0; start < input.size(); start += blockSize, ++block)
+        {
+            if (moving)
+                reverb.setPreDelayMs ((block / 40) % 2 == 1 ? 330.0f : 20.0f);
+
+            reverb.process (std::span<const float> { input.data() + start, blockSize },
+                            std::span<float> { out.left.data() + start, blockSize },
+                            std::span<float> { out.right.data() + start, blockSize });
+        }
+
+        float step = 0.0f;
+
+        for (std::size_t i = static_cast<std::size_t> (sr) + 1; i < out.left.size(); ++i)
+            step = std::max (step, std::abs (out.left[i] - out.left[i - 1]));
+
+        return static_cast<double> (step);
+    };
+
+    const auto steady = largestStep (false);
+    const auto moving = largestStep (true);
+    INFO ("Plus grand écart entre échantillons : " << steady << " fixe, " << moving << " en bougeant");
+    REQUIRE (moving < 1.5 * steady);
+}
+
+TEST_CASE ("SHIMMER : le mode double ajoute la transposition vers le bas", "[shimmer]")
+{
+    const auto tailAt = [] (ShimmerReverb::PitchMode mode, double frequency)
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setDecaySeconds (6.0f);
+        reverb.setInterval (12.0f);
+        reverb.setShimmer (0.8f);
+        reverb.setPitchMode (mode);
+        reverb.reset();
+
+        auto input = sine (440.0, sr, static_cast<int> (sr * 3.0), 0.3f);
+        std::fill (input.begin() + static_cast<std::ptrdiff_t> (sr), input.end(), 0.0f);
+
+        const auto out = render (reverb, input);
+        return magnitudeAt (slice (out.left, 1.5, 2.5), frequency, sr);
+    };
+
+    const auto singleDown = tailAt (ShimmerReverb::PitchMode::single, 220.0);
+    const auto dualDown = tailAt (ShimmerReverb::PitchMode::dual, 220.0);
+    const auto dualUp = tailAt (ShimmerReverb::PitchMode::dual, 880.0);
+    const auto dualSource = tailAt (ShimmerReverb::PitchMode::dual, 440.0);
+
+    INFO ("220 Hz : " << singleDown << " en simple, " << dualDown << " en double ; 880 Hz en double : " << dualUp);
+    REQUIRE (dualDown > 10.0 * singleDown);
+    REQUIRE (dualUp > 0.1 * dualSource); // la montée reste là
+}
+
+TEST_CASE ("SHIMMER : la largeur resserre la stéréo jusqu'au mono", "[shimmer]")
+{
+    ShimmerReverb reverb;
+    reverb.prepare ({ sr, blockSize });
+    reverb.setShimmer (0.0f);
+    reverb.setWidth (0.0f);
+    reverb.reset();
+
+    const auto out = render (reverb, noise (static_cast<std::size_t> (sr * 1.0), 0.3f));
+
+    for (std::size_t i = 0; i < out.left.size(); ++i)
+        REQUIRE (out.left[i] == Catch::Approx (out.right[i]).margin (1.0e-6));
+
+    REQUIRE (rms (slice (out.left, 0.3, 1.0)) > 0.01);
+}
+
+TEST_CASE ("SHIMMER : le coupe-bas retire le grave de la nappe", "[shimmer]")
+{
+    const auto lowAt = [] (float lowCutHz)
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setShimmer (0.0f);
+        reverb.setLowCutHz (lowCutHz);
+        reverb.reset();
+
+        const auto out = render (reverb, sine (100.0, sr, static_cast<int> (sr * 2.0), 0.3f));
+        return magnitudeAt (slice (out.left, 1.0, 2.0), 100.0, sr);
+    };
+
+    const auto open = lowAt (20.0f);
+    const auto cut = lowAt (1000.0f);
+    INFO ("100 Hz : " << db (open) << " dB coupe-bas à 20 Hz, " << db (cut) << " dB à 1 kHz");
+    REQUIRE (cut < open * 0.05); // -26 dB (deux filtres d'ordre 2 à une décade)
+}
+
+TEST_CASE ("SHIMMER : la modulation élargit la raie d'une note tenue", "[shimmer]")
+{
+    // Sans modulation, la réverbe est linéaire et invariante : une sinusoïde en sort pure. La
+    // modulation fait légèrement varier la hauteur de la queue (effet chorus).
+    const auto purity = [] (float depth, float rate)
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setShimmer (0.0f);
+        reverb.setDecaySeconds (4.0f);
+        reverb.setModulationDepth (depth);
+        reverb.setModulationRate (rate);
+        reverb.reset();
+
+        const auto out = render (reverb, sine (1000.0, sr, static_cast<int> (sr * 3.0), 0.3f));
+        return fractionNear (powerSpectrum (slice (out.left, 1.5, 3.0)), 1000.0, 3.0);
+    };
+
+    const auto still = purity (0.0f, 0.4f);
+    const auto moving = purity (1.0f, 5.0f);
+    INFO ("Part de l'énergie à ±3 Hz de 1 kHz : " << still << " sans modulation, " << moving << " au maximum");
+    REQUIRE (still > 0.95);
+    REQUIRE (moving < 0.8);
+}
+
+TEST_CASE ("SHIMMER : sans diffusion, l'attaque garde des échos nets", "[shimmer]")
+{
+    // Facteur de crête des 80 premières ms de la réponse à une impulsion : pics isolés sans
+    // diffusion, matière fondue avec.
+    const auto crest = [] (float diffusionAmount)
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setShimmer (0.0f);
+        reverb.setDiffusion (diffusionAmount);
+        reverb.reset();
+
+        std::vector<float> input (static_cast<std::size_t> (sr * 0.2), 0.0f);
+        input[0] = 1.0f;
+        const auto out = render (reverb, input);
+        const auto early = slice (out.left, 0.0, 0.08);
+        double peak = 0.0;
+
+        for (const auto s : early)
+            peak = std::max (peak, static_cast<double> (std::abs (s)));
+
+        return peak / rms (early);
+    };
+
+    const auto sharp = crest (0.0f);
+    const auto smooth = crest (1.0f);
+    INFO ("Facteur de crête : " << sharp << " sans diffusion, " << smooth << " au maximum");
+    REQUIRE (sharp > 1.5 * smooth);
+}
+
+TEST_CASE ("SHIMMER : réglages par défaut identiques au son d'origine, à la fréquence près", "[shimmer]")
+{
+    // Les réglages ajoutés ont des valeurs par défaut qui redonnent le son d'avant : un preset
+    // ancien ne change pas. Même réglage explicite ou implicite : même sortie.
+    const auto renderWith = [] (bool explicitDefaults)
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setShimmer (0.5f);
+
+        if (explicitDefaults)
+        {
+            reverb.setSize (0.5f);
+            reverb.setDiffusion (0.8f);
+            reverb.setModulationDepth (0.3f);
+            reverb.setModulationRate (0.4f);
+            reverb.setLowCutHz (50.0f);
+            reverb.setPreDelayMs (0.0f);
+            reverb.setWidth (1.0f);
+            reverb.setPitchMode (ShimmerReverb::PitchMode::single);
+        }
+
+        reverb.reset();
+        return render (reverb, pluckedString (290, sr, static_cast<int> (sr * 1.0), 0.5f));
+    };
+
+    const auto implicit = renderWith (false);
+    const auto explicitly = renderWith (true);
+
+    // Seuls les arrondis de la conversion des réglages diffèrent : écart sous -60 dB.
+    std::vector<float> difference (implicit.left.size());
+
+    for (std::size_t i = 0; i < difference.size(); ++i)
+        difference[i] = explicitly.left[i] - implicit.left[i];
+
+    const auto ratio = rms (difference) / rms (implicit.left);
+    INFO ("Écart : " << db (ratio) << " dB");
+    REQUIRE (ratio < 1.0e-3);
+}
+
 //==============================================================================
 TEST_CASE ("FREEZE : silence tant que rien n'est figé", "[freeze]")
 {

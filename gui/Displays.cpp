@@ -237,7 +237,9 @@ std::vector<float> ModuleDisplay::signature() const
         case ModuleId::whammy:
             return { status, std::round (telemetry.whammySemitones.load() * 20.0f), parameter (params::id::whInterval), parameter (params::id::whMode) };
         case ModuleId::harmonizer:
-            return { status, static_cast<float> (telemetry.harmonyNote.load()), static_cast<float> (telemetry.harmonyShift1.load()),
+            return { status, static_cast<float> (processor.getTrackingObstacles (module).size()),
+                     static_cast<float> (packChainOrder (processor.getChainOrder()) % 100003),
+                     static_cast<float> (telemetry.harmonyNote.load()), static_cast<float> (telemetry.harmonyShift1.load()),
                      static_cast<float> (telemetry.harmonyShift2.load()), parameter (params::id::hmKey), parameter (params::id::hmScale),
                      parameter (params::id::hmVoice1), parameter (params::id::hmVoice2) };
         case ModuleId::amp:
@@ -388,6 +390,27 @@ void ModuleDisplay::paint (juce::Graphics& g)
         case ModuleId::poly:       paintPoly (g, inner); break;
         case ModuleId::freeze:     paintFreeze (g, inner); break;
         case ModuleId::granular:   paintGranular (g, inner); break;
+    }
+
+    // Conseil de placement : ces modules ont besoin d'une note seule et claire.
+    if (module == ModuleId::harmonizer || module == ModuleId::sub)
+    {
+        if (const auto obstacles = processor.getTrackingObstacles (module); ! obstacles.empty())
+        {
+            juce::StringArray names;
+
+            for (const auto obstacle : obstacles)
+                names.add (infoFor (obstacle).pedalName);
+
+            const auto banner = getLocalBounds().toFloat().reduced (6.0f * scale).removeFromBottom (32.0f * scale);
+            g.setColour (theme::screenGlass);
+            g.fillRect (banner);
+            g.setColour (theme::amber);
+            g.drawRect (banner, 1.0f * scale);
+            g.setFont (theme::monoFont (9.5f * scale));
+            g.drawFittedText (utf8 ("PLACÉ APRÈS ") + names.joinIntoString (", ") + utf8 (" : NOTE MOINS NETTE, SUIVI MOINS FIABLE. À METTRE AVANT."),
+                              banner.reduced (6.0f * scale, 2.0f * scale).toNearestInt(), juce::Justification::centredLeft, 2, 0.8f);
+        }
     }
 
     // Module à l'arrêt : l'écran reste lisible, mais le signale.
@@ -788,15 +811,21 @@ void ModuleDisplay::paintShimmer (juce::Graphics& g, juce::Rectangle<float> area
 
     const auto decay = parameter (params::id::shDecay);
     const auto amount = parameter (params::id::shAmount) * 0.01f;
-    const auto tone = parameter (params::id::shTone);
+    const auto highCut = parameter (params::id::shTone);
+    const auto lowCut = parameter (params::id::shLowCut);
+    const auto preDelay = parameter (params::id::shPreDelay) * 0.001f;
+    const auto sizeFactor = static_cast<float> (dsp::ShimmerReverb::sizeFactorFor (parameter (params::id::shSize) * 0.01f));
+    const auto dual = parameter (params::id::shMode) > 0.5f;
     const auto interval = params::shimmerIntervalSemitones (juce::roundToInt (parameter (params::id::shInterval)));
 
     auto generations = area.removeFromRight (area.getWidth() * 0.4f);
     area.removeFromRight (8.0f * scale);
 
-    // Décroissance : graves au temps réglé, aigus (au-dessus de TONALITÉ) deux fois plus vite.
-    auto graph = area.withTrimmedBottom (14.0f * scale);
-    const auto span = decay * 1.25f;
+    // Décroissance après le pré-délai : graves au temps réglé, aigus (au-dessus de COUPE-HAUT)
+    // deux fois plus vite. La pente vient du même calcul que le module.
+    auto footer = area.removeFromBottom (14.0f * scale);
+    auto graph = area;
+    const auto span = preDelay + decay * 1.25f;
     const auto xFor = [&] (float seconds) { return graph.getX() + graph.getWidth() * seconds / span; };
     const auto yFor = [&] (float db) { return graph.getY() + graph.getHeight() * juce::jlimit (0.0f, 1.0f, -db / 66.0f); };
 
@@ -805,23 +834,36 @@ void ModuleDisplay::paintShimmer (juce::Graphics& g, juce::Rectangle<float> area
     for (const auto db : { -20.0f, -40.0f, -60.0f })
         g.drawHorizontalLine (juce::roundToInt (yFor (db)), graph.getX(), graph.getRight());
 
+    if (preDelay > 0.0f)
+    {
+        g.setColour (theme::screenGrid.brighter (0.3f));
+        g.fillRect (juce::Rectangle<float>::leftTopRightBottom (graph.getX(), graph.getY(), xFor (preDelay), graph.getBottom()));
+        screenText (g, utf8 ("PRÉ ") + juce::String (juce::roundToInt (preDelay * 1000.0f)) + " ms",
+                    juce::Rectangle<float> (graph.getX() + 2.0f * scale, graph.getBottom() - 12.0f * scale, 80.0f * scale, 12.0f * scale),
+                    9.0f * scale, secondary);
+    }
+
     const auto highDecay = juce::jmax (0.25f, decay * static_cast<float> (dsp::ShimmerReverb::highDecayRatio));
-    dashedLine (g, { xFor (0.0f), yFor (0.0f), xFor (juce::jmin (span, highDecay * 1.1f)), yFor (-60.0f * juce::jmin (span, highDecay * 1.1f) / highDecay) },
-                secondary, scale);
+    const auto highEnd = juce::jmin (span - preDelay, highDecay * 1.1f);
+    dashedLine (g, { xFor (preDelay), yFor (0.0f), xFor (preDelay + highEnd), yFor (-60.0f * highEnd / highDecay) }, secondary, scale);
 
     juce::Path lows;
-    lows.startNewSubPath (xFor (0.0f), yFor (0.0f));
-    lows.lineTo (xFor (span), yFor (-60.0f * span / decay));
+    lows.startNewSubPath (xFor (preDelay), yFor (0.0f));
+    lows.lineTo (xFor (span), yFor (-60.0f * (span - preDelay) / decay));
     glowPath (g, lows, primary, scale);
 
     g.setColour (theme::amber);
-    g.drawVerticalLine (juce::roundToInt (xFor (decay)), yFor (-60.0f) - 6.0f * scale, yFor (-60.0f) + 6.0f * scale);
-    screenText (g, "T60 " + juce::String (decay, decay < 10.0f ? 1 : 0) + " s", area.removeFromBottom (14.0f * scale), 9.5f * scale, theme::amber);
-    screenText (g, utf8 ("aigus > ") + juce::String (tone / 1000.0f, 1) + " kHz", juce::Rectangle<float> (graph.getRight() - 110.0f * scale, graph.getY(), 110.0f * scale, 12.0f * scale),
+    g.drawVerticalLine (juce::roundToInt (xFor (preDelay + decay)), yFor (-60.0f) - 6.0f * scale, yFor (-60.0f) + 6.0f * scale);
+    screenText (g, "T60 " + juce::String (decay, decay < 10.0f ? 1 : 0) + utf8 (" s · TAILLE ×") + juce::String (sizeFactor, 2),
+                footer, 9.5f * scale, theme::amber);
+    screenText (g, juce::String (juce::roundToInt (lowCut)) + utf8 (" Hz – ") + juce::String (highCut / 1000.0f, 1) + " kHz",
+                juce::Rectangle<float> (graph.getRight() - 120.0f * scale, graph.getY(), 120.0f * scale, 12.0f * scale),
                 9.0f * scale, secondary, juce::Justification::centredRight);
 
-    // Générations : énergie gardée à chaque tour de boucle (calibrage exact du module).
-    const auto energy = dsp::ShimmerReverb::energyPerGenerationAtMaximum * amount * amount;
+    // Générations : énergie gardée à chaque tour de boucle (calibrage exact du module). En mode
+    // double, chaque tour se partage entre la montée et la descente, à énergie égale.
+    const auto energy = (dual ? dsp::ShimmerReverb::energyPerGenerationAtMaximumDual
+                              : dsp::ShimmerReverb::energyPerGenerationAtMaximum) * amount * amount;
     auto labels = generations.removeFromBottom (14.0f * scale);
     constexpr int count = 5;
     const auto width = generations.getWidth() / count;
@@ -837,10 +879,13 @@ void ModuleDisplay::paintShimmer (juce::Graphics& g, juce::Rectangle<float> area
         g.setColour ((k == 0 ? secondary : primary).withAlpha (0.85f));
         g.fillRect (column.withTop (column.getBottom() - height));
 
-        // Transposition cumulée de chaque génération, en demi-tons
-        const auto semitones = interval * static_cast<float> (k);
-        screenText (g, k == 0 ? "REV" : signedValue (semitones, 0),
-                    labels.withX (column.getX() - 4.0f * scale).withWidth (column.getWidth() + 8.0f * scale), 8.5f * scale, secondary, juce::Justification::centred);
+        // Transposition cumulée de chaque génération, en demi-tons (± en mode double)
+        const auto semitones = std::abs (interval) * static_cast<float> (k);
+        const auto label = k == 0 ? juce::String ("REV")
+                         : dual   ? utf8 ("±") + juce::String (juce::roundToInt (semitones))
+                                  : signedValue (interval * static_cast<float> (k), 0);
+        screenText (g, label, labels.withX (column.getX() - 4.0f * scale).withWidth (column.getWidth() + 8.0f * scale), 8.5f * scale, secondary,
+                    juce::Justification::centred);
     }
 }
 

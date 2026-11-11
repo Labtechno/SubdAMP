@@ -113,8 +113,9 @@ void FrequencyShifter::process (std::span<float> block) noexcept
         const auto shifted = static_cast<float> (i * c + q * s);
         previousOutput = shifted;
 
-        const auto wet = mix.getNext();
-        sample = dry + wet * (shifted - dry);
+        // Puissance constante : le décalé (autres fréquences) s'ajoute au sec sans perte de niveau.
+        const auto angle = mix.getNext() * 1.57079632679f;
+        sample = dry * std::cos (angle) + shifted * std::sin (angle);
     }
 
     // Renormalisation de l'oscillateur : la récurrence dérive lentement en amplitude.

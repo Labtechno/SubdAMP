@@ -165,6 +165,14 @@ public:
     /** MIX du module, de 0 à 1 (1 pour un module sans MIX, comme le GATE). */
     float getModuleMix (ModuleId module) const noexcept;
 
+    /**
+        Modules allumés, placés avant `module`, qui gênent un module ayant besoin d'une note seule
+        et claire (HARMONIZER, SUB) : FREQ SHIFT (son inharmonique), WHAMMY mélangé au direct
+        (deux notes à la fois), textures dosées à 50 % ou plus (nappes, voix superposées).
+        Mesuré sur le banc d'essai des combinaisons ; vide si rien ne gêne.
+    */
+    std::vector<ModuleId> getTrackingObstacles (ModuleId module) const;
+
     /** Coupure du GATE, pour son voyant : 0 (le son passe, ou gate arrêté) à 1 (il coupe). */
     float getGateCutting() const noexcept { return telemetry.gateCutting.load (std::memory_order_relaxed); }
 
@@ -242,6 +250,14 @@ private:
         std::atomic<float>& shDecay;
         std::atomic<float>& shAmount;
         std::atomic<float>& shTone;
+        std::atomic<float>& shMode;
+        std::atomic<float>& shSize;
+        std::atomic<float>& shDiffusion;
+        std::atomic<float>& shPreDelay;
+        std::atomic<float>& shModRate;
+        std::atomic<float>& shModDepth;
+        std::atomic<float>& shLowCut;
+        std::atomic<float>& shWidth;
         std::atomic<float>& poInterval1;
         std::atomic<float>& poLevel1;
         std::atomic<float>& poInterval2;

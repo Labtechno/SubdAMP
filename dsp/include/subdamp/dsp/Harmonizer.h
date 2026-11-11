@@ -30,6 +30,11 @@ namespace subdamp::dsp
 
     Le son direct n'est jamais retardé. Les voix d'harmonie arrivent avec 1,5 à 2,5 périodes
     de retard : ~5 ms sur le Mi aigu, ~25 ms sur un Do grave (drop C).
+
+    Continuité : l'attaque d'une nouvelle note (bruitée, mêlée à la précédente) fait perdre le
+    suivi quelques millisecondes. Plutôt que de couper les voix, l'harmonie tient jusqu'à 45 ms
+    en rejouant la dernière période suivie, puis enchaîne en fondu sur la nouvelle note. Si la
+    note ne revient pas, les voix s'éteignent en fondu (fin de note, silence).
 */
 class Harmonizer final : public MonoEffect
 {
@@ -92,6 +97,7 @@ private:
     void placeMarks (std::int64_t now) noexcept;
     void emitGrain (Voice& voice, std::int64_t now) noexcept;
     float renderVoice (Voice& voice, std::int64_t now) noexcept;
+    bool canReadFrozenPeriod (std::int64_t now) const noexcept;
     float hann (float phase) const noexcept;
 
     double sampleRate = 48000.0;
@@ -103,9 +109,14 @@ private:
 
     // Marques de période
     bool haveMark = false;
+    bool marksStale = false;      // suivi perdu : à vérifier quand la note revient
     std::int64_t lastMark = 0;
     float lastMarkPeriod = 0.0f;
     double nextMarkExact = -1.0;
+
+    // Tenue pendant une perte de suivi passagère (attaque de la note suivante)
+    int holdSamples = 2160;
+    int holdRemaining = 0;
 
     // Harmonie
     int key = 4;

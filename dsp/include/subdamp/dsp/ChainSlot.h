@@ -5,6 +5,7 @@
 #include "subdamp/dsp/StereoTexture.h"
 
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace subdamp::dsp
@@ -14,11 +15,15 @@ namespace subdamp::dsp
     Emplacement d'un module dans la chaîne en série : interrupteur, MIX dry/wet, stéréo.
 
     Le module reçoit la somme mono (L + R) / 2 ; avant toute texture, L = R et la somme est
-    exactement le signal d'origine. Le mélange se fait canal par canal :
+    exactement le signal d'origine. Le mélange se fait canal par canal, ce qui garde la stéréo
+    de la partie sèche quand un module mono suit une texture. Deux lois :
 
-        sortie = sec × (1 − MIX) + traité × MIX
-
-    ce qui garde la stéréo de la partie sèche quand un module mono suit une texture.
+      - linéaire          : sortie = sec × (1 − MIX) + traité × MIX
+        pour un traité en phase avec le sec (ampli, cab) : pas de bosse de niveau ;
+      - puissance constante : sortie = sec × cos(MIX·90°) + traité × sin(MIX·90°)
+        pour un traité d'une autre hauteur ou d'une autre texture (SUB, HARMONIZER,
+        textures) : le niveau ne baisse pas au milieu de la course. En linéaire, chaque module
+        dosé à 50 % faisait perdre 3 à 6 dB, et une chaîne de plusieurs modules s'effondrait.
 
     Interrupteur (fondu de 15 ms, e = 0 à 1) :
       - module mono   : sortie = sec × (1 − e) + e × (sec' × (1 − MIX) + traité × MIX)
@@ -43,6 +48,17 @@ public:
 
     void setEnabled (bool shouldBeEnabled) noexcept;
     void setMix (float newMix) noexcept { mix.setTarget (newMix < 0.0f ? 0.0f : (newMix > 1.0f ? 1.0f : newMix)); }
+
+    enum class MixLaw
+    {
+        linear,
+        constantPower
+    };
+
+    void setMixLaw (MixLaw newLaw) noexcept { law = newLaw; }
+
+    /** Gains du sec et du traité pour un MIX donné, selon la loi. */
+    static std::pair<float, float> mixGains (float mixAmount, MixLaw law) noexcept;
 
     /**
         Le traité contient déjà le son direct : la sortie devient sec + MIX × traité. Pour le
@@ -74,6 +90,7 @@ private:
     bool enabled = false;
     bool idle = true;
     bool wetAddsToDry = false;
+    MixLaw law = MixLaw::linear;
 
     std::vector<float> monoBuffer, fadeBuffer, wetLeft, wetRight;
 

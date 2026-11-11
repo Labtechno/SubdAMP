@@ -115,6 +115,14 @@ SubdAmpProcessor::SubdAmpProcessor()
           rawParameter (parameters, params::id::shDecay),
           rawParameter (parameters, params::id::shAmount),
           rawParameter (parameters, params::id::shTone),
+          rawParameter (parameters, params::id::shMode),
+          rawParameter (parameters, params::id::shSize),
+          rawParameter (parameters, params::id::shDiffusion),
+          rawParameter (parameters, params::id::shPreDelay),
+          rawParameter (parameters, params::id::shModRate),
+          rawParameter (parameters, params::id::shModDepth),
+          rawParameter (parameters, params::id::shLowCut),
+          rawParameter (parameters, params::id::shWidth),
           rawParameter (parameters, params::id::poInterval1),
           rawParameter (parameters, params::id::poLevel1),
           rawParameter (parameters, params::id::poInterval2),
@@ -144,6 +152,12 @@ SubdAmpProcessor::SubdAmpProcessor()
 
     // FREEZE : la nappe s'ajoute au jeu (MIX = son niveau), qui n'est jamais atténué.
     slotFor (ModuleId::freeze).setWetAddsToDry (true);
+
+    // Traité d'une autre hauteur ou d'une autre texture : mélange à puissance constante, le
+    // niveau ne s'effondre pas quand on enchaîne plusieurs modules dosés. Ampli et cab
+    // (traité en phase avec le sec) restent linéaires.
+    for (const auto module : { ModuleId::sub, ModuleId::harmonizer, ModuleId::shimmer, ModuleId::poly, ModuleId::granular })
+        slotFor (module).setMixLaw (dsp::ChainSlot::MixLaw::constantPower);
 
     parameters.state.setProperty (state::chainOrderProperty, juce::String (formatChainOrder (defaultChainOrder)), nullptr);
 
@@ -224,7 +238,7 @@ double SubdAmpProcessor::getTailLengthSeconds() const
     auto seconds = 2.0;
 
     if (isModuleEnabled (ModuleId::shimmer))
-        seconds = std::max (seconds, 1.5 * load (textureRaw.shDecay));
+        seconds = std::max (seconds, 1.5 * load (textureRaw.shDecay) + 0.001 * load (textureRaw.shPreDelay));
 
     if (isModuleEnabled (ModuleId::freeze))
         seconds = std::max (seconds, 0.001 * load (textureRaw.frRelease) + 1.0);
@@ -459,6 +473,14 @@ void SubdAmpProcessor::updateTargetsFromParameters() noexcept
     shimmer.setDecaySeconds (load (textureRaw.shDecay));
     shimmer.setShimmer (load (textureRaw.shAmount) * 0.01f);
     shimmer.setToneHz (load (textureRaw.shTone));
+    shimmer.setPitchMode (load (textureRaw.shMode) > 0.5f ? dsp::ShimmerReverb::PitchMode::dual : dsp::ShimmerReverb::PitchMode::single);
+    shimmer.setSize (load (textureRaw.shSize) * 0.01f);
+    shimmer.setDiffusion (load (textureRaw.shDiffusion) * 0.01f);
+    shimmer.setPreDelayMs (load (textureRaw.shPreDelay));
+    shimmer.setModulationRate (load (textureRaw.shModRate));
+    shimmer.setModulationDepth (load (textureRaw.shModDepth) * 0.01f);
+    shimmer.setLowCutHz (load (textureRaw.shLowCut));
+    shimmer.setWidth (load (textureRaw.shWidth) * 0.01f);
 
     poly.setInterval (0, load (textureRaw.poInterval1));
     poly.setInterval (1, load (textureRaw.poInterval2));
@@ -673,6 +695,31 @@ void SubdAmpProcessor::timerCallback()
 bool SubdAmpProcessor::isModuleEnabled (ModuleId module) const noexcept
 {
     return isOn (*enabledValues[indexOf (module)]);
+}
+
+std::vector<ModuleId> SubdAmpProcessor::getTrackingObstacles (ModuleId module) const
+{
+    std::vector<ModuleId> obstacles;
+
+    for (const auto before : getChainOrder())
+    {
+        if (before == module)
+            break;
+
+        if (! isModuleEnabled (before) || getModuleMix (before) < 0.01f)
+            continue;
+
+        const auto mix = getModuleMix (before);
+        const auto disturbs = before == ModuleId::freqShift
+                           || (before == ModuleId::whammy && mix < 0.99f)
+                           || (infoFor (before).isTexture && before != ModuleId::freeze && mix >= 0.5f)
+                           || (before == ModuleId::freeze && isOn (*parameters.getRawParameterValue (params::id::frHold)) && mix >= 0.5f);
+
+        if (disturbs)
+            obstacles.push_back (before);
+    }
+
+    return obstacles;
 }
 
 float SubdAmpProcessor::getModuleMix (ModuleId module) const noexcept

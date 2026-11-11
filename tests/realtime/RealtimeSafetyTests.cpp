@@ -190,6 +190,17 @@ TEST_CASE ("Les textures n'allouent rien, y compris en marche / arrêt et change
         poly.setInterval (0, (i / 250) % 2 == 1 ? 12.0f : 7.0f);
         granular.setMode ((i / 400) % 2 == 1 ? GranularCloud::Mode::stutter : GranularCloud::Mode::cloud);
         shimmer.setDecaySeconds ((i / 350) % 2 == 1 ? 12.0f : 3.0f);
+        shimmer.setPitchMode ((i / 180) % 2 == 1 ? ShimmerReverb::PitchMode::dual : ShimmerReverb::PitchMode::single);
+        shimmer.setInterval ((i / 220) % 2 == 1 ? 19.0f : 12.0f);
+        shimmer.setSize (static_cast<float> (i % 97) / 96.0f);
+        shimmer.setPreDelayMs (static_cast<float> ((i * 7) % 501));
+        shimmer.setDiffusion (static_cast<float> (i % 53) / 52.0f);
+        shimmer.setModulationRate (0.05f + static_cast<float> (i % 31) * 0.16f);
+        shimmer.setModulationDepth (static_cast<float> (i % 41) / 40.0f);
+        shimmer.setLowCutHz (20.0f + static_cast<float> ((i * 13) % 981));
+        shimmer.setToneHz (500.0f + static_cast<float> ((i * 37) % 15501));
+        shimmer.setWidth (static_cast<float> (i % 23) / 22.0f);
+        shimmer.setShimmer ((i / 400) % 3 == 2 ? 0.0f : 1.0f); // boucle arrêtée puis relancée
         slots[3].setEnabled ((i / 500) % 3 != 2);
         slots[0].setMix ((i / 150) % 2 == 1 ? 1.0f : 0.3f);
 

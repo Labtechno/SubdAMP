@@ -4,8 +4,8 @@ Plugin guitare (VST3 + application standalone) orienté pitch : octaver, whammy,
 harmonizer, frequency shifter, shimmer, textures. Usage personnel.
 
 **État : étape 4 + chaîne en série.** Les 11 modules sont en série, dans l'ordre de ton choix
-(glisser une pédale pour la déplacer). Chacun a un potard **MIX** : `sortie = sec × (1 − MIX) + traité × MIX`.
-Le signal est stéréo de bout en bout.
+(glisser une pédale pour la déplacer). Chacun a un potard **MIX** qui dose le son traité contre
+le son sec (voir plus bas les deux lois de mélange). Le signal est stéréo de bout en bout.
 
 | Module | Rôle | Latence |
 |---|---|---|
@@ -16,7 +16,7 @@ Le signal est stéréo de bout en bout.
 | AMPLI | Capture Neural Amp Modeler (`.nam`) + gain, égaliseur 3 bandes, niveau | LIVE (0 à 48 kHz, < 1 ms sinon) |
 | CAB | Réponse impulsionnelle (`.wav`, `.aif`), ou cab interne par filtres | LIVE (0) |
 | FREQ SHIFT | Décaleur de fréquence (type Bode), mix, réinjection | LIVE (≈ 0) |
-| SHIMMER | Réverbe (réseau de 8 lignes) dont la queue est transposée en boucle : +octave, +octave et quinte… | TEXTURE (≈ 30 ms à MIX 100 %) |
+| SHIMMER | Réverbe (réseau de 8 lignes) dont la queue est transposée en boucle : +octave, +octave et quinte… ; mode simple ou double (haut + bas), taille, pré-délai, diffusion, modulation, coupe-bas / coupe-haut, largeur | TEXTURE (≈ 30 ms à MIX 100 %) |
 | POLY | Transposition polyphonique haute qualité (Signalsmith Stretch), 2 voix en stéréo, formants | TEXTURE (≈ 150 ms) |
 | FREEZE | Bouton FIGER : le son du moment est tenu en nappe infinie (gel spectral) ; le MIX dose la nappe, le jeu passe toujours | TEXTURE |
 | GRANULAR | Grains des 8 dernières secondes : nuage dispersé, ou stutter calé sur le tempo (grille du DAW en lecture) | TEXTURE |
@@ -27,7 +27,15 @@ enregistré avec la session ou le preset. Le changement passe par un fondu de 20
 GATE → SUB → WHAMMY → AMPLI → CAB → HARMO → FREQ → POLY → GRAIN → FREEZE → SHIMMER.
 
 **MIX** : à 100 %, seul le son traité sort ; à 0 %, le module est transparent. Tous les modules
-en ont un, sauf le GATE (un gate à moitié mélangé n'a pas de sens). Quelques cas :
+en ont un, sauf le GATE (un gate à moitié mélangé n'a pas de sens). Deux lois de mélange :
+- AMPLI et CAB (traité en phase avec le sec) : linéaire, `sec × (1 − MIX) + traité × MIX` ;
+- modules de hauteur et textures (SUB, HARMONIZER, WHAMMY, FREQ SHIFT, SHIMMER, POLY, GRANULAR) :
+  à puissance constante, `sec × cos(MIX × 90°) + traité × sin(MIX × 90°)`. Le traité n'a pas la
+  même hauteur que le sec : en linéaire, chaque module à 50 % faisait perdre 3 à 6 dB, et une
+  chaîne de plusieurs modules mélangés s'effondrait (jusqu'à −30 dB tout allumé). À puissance
+  constante, le niveau ne creuse plus au milieu de la course.
+
+Quelques cas :
 - SUB et HARMONIZER : le traité ne contient que les voix (les anciens réglages DIRECT sont
   remplacés par le MIX) ;
 - FREEZE : la nappe s'ajoute au jeu, qui n'est jamais atténué (MIX = niveau de la nappe) ;
@@ -40,6 +48,16 @@ après elles (ampli, cab…) traite la somme mono, et la part sèche de son MIX 
 a plus de son direct et tout ce qui suit attend sa latence (POLY ≈ 150 ms) : le badge passe alors
 en TEXTURE. Arrêtées, les textures laissent finir leur queue (mode « trails ») puis ne coûtent
 plus rien. Le tempo utilisé est celui du DAW ; en standalone, celui du potard TEMPO du GRANULAR.
+
+**Ordre conseillé** : l'HARMONIZER (et, dans une moindre mesure, le SUB) a besoin d'une note
+seule et nette pour la suivre. Placé après le FREQ SHIFT (qui rend la note inharmonique), après
+un WHAMMY mélangé au direct (deux notes à la fois) ou après une texture dosée à plus de 50 %, son
+suivi devient moins fiable : un bandeau orange le signale sur son écran. Mesure sur une phrase de
+guitare : 93 à 94 % des notes bien suivies derrière la plupart des modules, 63 % derrière le FREQ
+SHIFT, 50 % derrière un WHAMMY à −12 mélangé. Toutes les autres combinaisons fonctionnent : un banc
+d'essai rejoue les 110 paires ordonnées, chaque module à chacune des 11 places et 200 ordres
+complets tirés au hasard (niveau, coupures, sauts de signal), et une version rapide tourne à
+chaque compilation.
 
 **Interface** : pédalier en haut, dans l'ordre réel de la chaîne (clic sur une pédale : ses
 réglages ; clic sur sa LED : marche / arrêt ; glisser : changer de place). Le MIX s'affiche sur
@@ -55,13 +73,32 @@ quand des textures sont mélangées au son direct).
 - **HARMONIZER** : détection de hauteur YIN (décimée puis affinée, précision ≈ 1 centième de
   demi-ton, de 60 à 1400 Hz) et synthèse TD-PSOLA, qui garde le timbre de la note. Les voix
   suivent les bends et le vibrato ; le niveau de chaque voix est ramené à celui de la note jouée.
+  Au changement de note, le suivi se raccroche en moins d'une analyse, et pendant ce court
+  instant les voix relisent la dernière période connue au lieu de se taire (plus de micro-coupure,
+  quel que soit le niveau de jeu). Une note n'est changée qu'une fois confirmée, et une garde
+  d'octave évite qu'une note douce après une note forte ne soit prise une octave trop bas.
   Monophonique : jouer des notes isolées. Placé après l'ampli par défaut (harmonies plus nettes).
 - **SHIMMER** : à chaque tour, la queue de la réverbe passe par un transpositeur (vocodeur de
-  phase Signalsmith, sans repliement) puis par un passe-haut à 150 Hz. Ce filtre est essentiel :
-  la transposition déplace toutes les fréquences sauf le grave extrême, qui sinon tourne sans fin
-  dans la boucle et sature (c'était le défaut de la première version). Au maximum, chaque
-  génération garde 80 % de l'énergie de la précédente : nappe longue, jamais d'emballement.
-  Les aigus au-dessus de TONALITÉ s'éteignent deux fois plus vite que les graves.
+  phase Signalsmith, sans repliement) puis par un passe-haut d'au moins 150 Hz. Ce filtre est
+  essentiel : la transposition déplace toutes les fréquences sauf le grave extrême, qui sinon
+  tourne sans fin dans la boucle et sature (c'était le défaut de la première version). Au
+  maximum, chaque génération garde 80 % de l'énergie de la précédente (50 % en mode double) :
+  nappe longue, jamais d'emballement, quel que soit le réglage. Réglages, dans l'esprit des
+  shimmers de studio (ValhallaShimmer notamment) mais avec une implémentation propre :
+  - INTERVALLE et MODE : simple (la boucle monte, ou descend pour −octave) ou double ± (un second
+    transpositeur descend du même intervalle ; la nappe s'étend vers le haut et vers le bas) ;
+  - DURÉE (T60 des graves) et SHIMMER (quantité réinjectée dans la boucle) ;
+  - TAILLE : longueur des lignes, de ×0,5 (petite pièce, échos serrés) à ×2 (grand espace) ; la
+    DURÉE reste celle réglée ;
+  - PRÉ-DÉLAI (0 à 500 ms) : sur l'entrée seule ; un changement passe par un fondu enchaîné ;
+  - DIFFUSION : 0 = échos nets, 100 % = attaque fondue ;
+  - VITESSE MOD et PROF. MOD : deux oscillateurs lents font varier les longueurs ; au maximum,
+    effet chorus sur la queue ;
+  - COUPE-BAS (20 Hz à 1 kHz) et COUPE-HAUT : bornent la nappe et la boucle ; les aigus au-dessus
+    de COUPE-HAUT s'éteignent deux fois plus vite que les graves ;
+  - LARGEUR : de mono à pleine largeur.
+  Les valeurs par défaut des nouveaux réglages redonnent le son d'avant : un ancien preset ne
+  change pas.
 
 ## Captures d'amplis et IR
 
@@ -81,8 +118,9 @@ quand des textures sont mélangées au son direct).
 Une capture WaveNet « standard » est le module le plus lourd. Mesure sur un cœur de
 processeur serveur à 2,1 GHz, blocs de 64 échantillons : environ 16 à 23 % d'un cœur
 (A2 : ~6 %, LSTM : < 1 %). Un processeur de bureau récent fait nettement mieux.
-Les modules de pitch et les textures restent légers : moins de 2 % d'un cœur chacun à
-48 kHz, dans le pire cas (±2 octaves, deux voix, nuage dense, boucle de shimmer au maximum).
+Les modules de pitch et les textures restent légers : au plus 2 % d'un cœur chacun à
+48 kHz, dans le pire cas (±2 octaves, deux voix, nuage dense, shimmer en mode double avec
+tous ses réglages au maximum).
 Pour mesurer sur ta machine : `build/tests/SubdAmpBenchmark` (accepte tes propres `.nam`).
 
 Sur x86, le moteur NAM est compilé avec AVX2/FMA (≈ 30 % de CPU en moins). Pour un

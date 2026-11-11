@@ -152,6 +152,14 @@ int main (int argc, char** argv)
     shimmer.setShimmer (1.0f);
     std::printf ("  SHIMMER : %5.1f %%\n", measureTextureLoadPercent (shimmer, 48000.0, 64));
 
+    ShimmerReverb shimmerDual;
+    shimmerDual.setShimmer (1.0f);
+    shimmerDual.setPitchMode (ShimmerReverb::PitchMode::dual);
+    shimmerDual.setSize (1.0f);
+    shimmerDual.setModulationDepth (1.0f);
+    shimmerDual.setPreDelayMs (500.0f);
+    std::printf ("  SHIMMER double, réglages au maximum : %5.1f %%\n", measureTextureLoadPercent (shimmerDual, 48000.0, 64));
+
     PolyShifter poly;
     poly.setInterval (0, 12.0f);
     poly.setInterval (1, 7.0f);

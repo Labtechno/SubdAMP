@@ -8,6 +8,15 @@
 namespace subdamp::dsp
 {
 
+std::pair<float, float> ChainSlot::mixGains (float mixAmount, MixLaw mixLaw) noexcept
+{
+    if (mixLaw == MixLaw::linear)
+        return { 1.0f - mixAmount, mixAmount };
+
+    const auto angle = mixAmount * 1.57079632679f; // MIX × 90°
+    return { std::cos (angle), std::sin (angle) };
+}
+
 void ChainSlot::prepare (const ProcessSpec& spec)
 {
     if (mono != nullptr)
@@ -117,9 +126,10 @@ void ChainSlot::processMono (std::span<float> left, std::span<float> right) noex
             dryWrite = (dryWrite + 1) & dryMask;
         }
 
-        const auto wet = processed[i] * m;
-        left[i] = left[i] * (1.0f - e) + e * (alignedLeft * (1.0f - m) + wet);
-        right[i] = right[i] * (1.0f - e) + e * (alignedRight * (1.0f - m) + wet);
+        const auto [dryGain, wetGain] = mixGains (m, law);
+        const auto wet = processed[i] * wetGain;
+        left[i] = left[i] * (1.0f - e) + e * (alignedLeft * dryGain + wet);
+        right[i] = right[i] * (1.0f - e) + e * (alignedRight * dryGain + wet);
     }
 }
 
@@ -157,10 +167,11 @@ void ChainSlot::processTexture (std::span<float> left, std::span<float> right) n
     {
         peak = std::max (peak, std::max (std::abs (wetL[i]), std::abs (wetR[i])));
 
-        const auto m = mix.getNext();
-        const auto dryGain = wetAddsToDry ? 1.0f : 1.0f - fade[i] * m;
-        left[i] = left[i] * dryGain + wetL[i] * m;
-        right[i] = right[i] * dryGain + wetR[i] * m;
+        // Interrupteur coupé (fade = 0) : le sec repasse en entier, la queue continue au MIX.
+        const auto [dryAtMix, wetGain] = mixGains (mix.getNext(), law);
+        const auto dryGain = wetAddsToDry ? 1.0f : 1.0f - fade[i] * (1.0f - dryAtMix);
+        left[i] = left[i] * dryGain + wetL[i] * wetGain;
+        right[i] = right[i] * dryGain + wetR[i] * wetGain;
     }
 
     if (enabled || enable.isSmoothing())

@@ -27,6 +27,7 @@ void PitchTracker::prepare (double newSampleRate, double minHz, double maxHz)
     tauMax = static_cast<int> (std::ceil (decimatedRate / minHz));
     window = tauMax;
     hop = std::max (1, static_cast<int> (std::lround (decimatedRate * 0.004)));
+    reacquireFramesAfterLoss = static_cast<int> (std::lround (reacquireSeconds / 0.004));
 
     decimated.assign (std::bit_ceil (static_cast<std::size_t> (window + tauMax + 4)), 0.0f);
     decimatedMask = decimated.size() - 1;
@@ -56,6 +57,21 @@ void PitchTracker::reset() noexcept
     voiced = false;
     hasNewEstimate = false;
     period = 0.0f;
+    reacquireFrames = 0;
+    pendingPeriod = 0.0f;
+    lastGoodPeriod = 0.0f;
+}
+
+int PitchTracker::localMinimumNear (int tau) const noexcept
+{
+    // Creux de la fonction normalisée le plus proche de tau (± 3 échantillons décimés).
+    auto best = std::clamp (tau, tauMin, tauMax - 1);
+
+    for (int t = std::max (tauMin, tau - 3); t <= std::min (tauMax - 1, tau + 3); ++t)
+        if (normalised[static_cast<std::size_t> (t)] < normalised[static_cast<std::size_t> (best)])
+            best = t;
+
+    return best;
 }
 
 bool PitchTracker::takeNewEstimate() noexcept
@@ -106,9 +122,18 @@ void PitchTracker::analyse() noexcept
         energy += static_cast<double> (frame[j]) * frame[j];
     }
 
+    // Une note vient d'être perdue : on décompte la fenêtre de raccrochage facile.
+    if (voiced)
+        reacquireFrames = reacquireFramesAfterLoss;
+    else if (reacquireFrames > 0)
+        --reacquireFrames;
+
     if (std::sqrt (energy / static_cast<double> (frameLength)) < silenceRms)
     {
         voiced = false;
+        reacquireFrames = 0; // silence : la prochaine note repart du seuil strict
+        pendingPeriod = 0.0f;
+        lastGoodPeriod = 0.0f;
         return;
     }
 
@@ -166,11 +191,31 @@ void PitchTracker::analyse() noexcept
                 best = tau;
     }
 
+    const auto continuing = voiced || reacquireFrames > 0;
+
+    // Erreur d'octave vers le grave : l'estimation est un multiple de la période suivie et
+    // celle-ci colle encore au signal → c'est toujours la note en cours.
+    if (continuing && lastGoodPeriod > 0.0f)
+    {
+        const auto previous = lastGoodPeriod / static_cast<float> (decimation);
+        const auto multiple = static_cast<float> (best) / previous;
+        const auto nearest = std::round (multiple);
+
+        if (nearest >= 2.0f && nearest <= 4.0f && std::abs (multiple - nearest) < 0.04f * nearest)
+        {
+            const auto candidate = localMinimumNear (static_cast<int> (std::lround (previous)));
+
+            if (normalised[static_cast<std::size_t> (candidate)] < stayThreshold)
+                best = candidate;
+        }
+    }
+
     const auto quality = normalised[static_cast<std::size_t> (best)];
 
-    if (quality >= (voiced ? stayThreshold : enterThreshold))
+    if (quality >= (continuing ? stayThreshold : enterThreshold))
     {
         voiced = false;
+        pendingPeriod = 0.0f;
         return;
     }
 
@@ -189,7 +234,38 @@ void PitchTracker::analyse() noexcept
     }
 
     // 5. Affinage à pleine résolution
-    period = refineAtFullRate (refined * static_cast<float> (decimation));
+    const auto estimate = refineAtFullRate (refined * static_cast<float> (decimation));
+
+    // 6. Confirmation d'un changement de note. Première note (après un silence) : adoptée tout
+    //    de suite au seuil strict. Sinon, une période nouvelle doit se répéter sur l'analyse
+    //    suivante ; entre-temps, la période précédente est conservée.
+    const auto differs = [] (float a, float b) { return std::abs (a - b) > 0.04f * b; };
+
+    if (lastGoodPeriod > 0.0f && continuing && differs (estimate, lastGoodPeriod))
+    {
+        if (pendingPeriod > 0.0f && ! differs (estimate, pendingPeriod))
+        {
+            pendingPeriod = 0.0f; // confirmée
+        }
+        else
+        {
+            pendingPeriod = estimate;
+
+            // Note en cours conservée pendant l'attente ; si on l'avait perdue, on attend.
+            if (! voiced)
+                return;
+
+            period = lastGoodPeriod;
+            return;
+        }
+    }
+    else
+    {
+        pendingPeriod = 0.0f;
+    }
+
+    period = estimate;
+    lastGoodPeriod = estimate;
     voiced = true;
 }
 

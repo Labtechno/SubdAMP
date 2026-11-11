@@ -161,11 +161,19 @@ void SubdAmpEditor::buildCards()
     cab.setFooter (&cabFile, 460, 64);
 
     auto& shimmer = cardFor (ModuleId::shimmer);
-    shimmer.setDescription (utf8 ("Réverbe dont la queue monte d'un intervalle à chaque passage : la nappe s'élève. Stéréo."));
-    shimmer.addChoice (params::id::shInterval, "INTERVALLE", 180);
+    shimmer.setDescription (utf8 ("Réverbe dont la queue monte d'un intervalle à chaque passage (ou monte et descend, en mode double) : la nappe s'élève. Stéréo."));
+    shimmer.addChoice (params::id::shInterval, "INTERVALLE", 170);
+    shimmer.addChoice (params::id::shMode, "MODE", 150);
     shimmer.addKnob (params::id::shDecay, utf8 ("DURÉE"));
     shimmer.addKnob (params::id::shAmount, "SHIMMER");
-    shimmer.addKnob (params::id::shTone, utf8 ("TONALITÉ"));
+    shimmer.addKnob (params::id::shSize, "TAILLE");
+    shimmer.addKnob (params::id::shPreDelay, utf8 ("PRÉ-DÉLAI"));
+    shimmer.addKnob (params::id::shDiffusion, "DIFFUSION");
+    shimmer.addKnob (params::id::shModRate, "VITESSE MOD");
+    shimmer.addKnob (params::id::shModDepth, "PROF. MOD");
+    shimmer.addKnob (params::id::shLowCut, "COUPE-BAS");
+    shimmer.addKnob (params::id::shTone, "COUPE-HAUT");
+    shimmer.addKnob (params::id::shWidth, "LARGEUR");
 
     auto& poly = cardFor (ModuleId::poly);
     poly.setDescription (utf8 ("Transposition polyphonique haute qualité, deux voix en stéréo. Accords bienvenus. À MIX 100 %, tout ce qui suit attend sa latence."));

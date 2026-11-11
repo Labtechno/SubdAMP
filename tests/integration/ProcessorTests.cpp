@@ -1,5 +1,6 @@
 // Tests du processeur complet (chaîne, fichiers, état sauvegardé), sans hôte audio.
 
+#include "../dsp/TestSignals.h"
 #include "../realtime/AllocationTracking.h"
 
 #include "gui/PedalBoard.h"
@@ -13,7 +14,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <random>
 
 using namespace subdamp;
 
@@ -620,8 +623,11 @@ TEST_CASE ("Capture d'écran de l'interface avec une capture et une IR chargées
     processor->prepareToPlay (48000.0, 64);
     setParameter (*processor, params::id::subEnabled, 1.0f);
     setParameter (*processor, params::id::hmEnabled, 1.0f);
-    processor->moveModule (ModuleId::freqShift, 2); // FREQ SHIFT avant l'ampli
+    processor->moveModule (ModuleId::freqShift, 2); // FREQ SHIFT avant l'ampli…
+    setParameter (*processor, params::id::fsEnabled, 1.0f); // … donc avant l'HARMO : bandeau de placement
     setParameter (*processor, params::id::shEnabled, 1.0f);
+    setParameter (*processor, params::id::shMode, 1.0f);      // double : générations « ± »
+    setParameter (*processor, params::id::shPreDelay, 120.0f); // visible sur la courbe
     setParameter (*processor, params::id::frEnabled, 1.0f);
     setParameter (*processor, params::id::frHold, 1.0f);
     setParameter (*processor, params::id::poEnabled, 1.0f);
@@ -777,4 +783,312 @@ TEST_CASE ("La prise d'oscilloscope rend ce qu'on entend, décimé vers 24 kHz",
     std::vector<float> latest (4);
     tap.copyLatest (latest);
     REQUIRE (latest == std::vector<float> { 994.0f, 996.0f, 998.0f, 1000.0f });
+}
+
+//==============================================================================
+// Banc d'essai des ordres de la chaîne (rapport détaillé) : SubdAmpProcessorTests "[combinations]".
+namespace
+{
+    struct ChainMetrics
+    {
+        bool finite = true;
+        float peak = 0.0f;
+        double playingRms = 0.0, tailRms = 0.0;
+        int dropouts = 0;
+        float maxJumpRatio = 0.0f; // plus grand saut d'un échantillon au suivant / niveau local
+    };
+
+    /** Phrase de guitare : six notes pincées en legato, puis une seconde de silence. */
+    std::vector<float> chainTestPhrase (double sampleRate)
+    {
+        const std::vector<int> delays { 582, 436, 326, 244, 194, 291 };
+        std::vector<float> phrase;
+
+        for (std::size_t k = 0; k < delays.size(); ++k)
+        {
+            const auto note = subdamp::test::pluckedString (delays[k], sampleRate, static_cast<int> (sampleRate * 0.4), 0.3f, static_cast<unsigned> (40 + k));
+            phrase.insert (phrase.end(), note.begin(), note.end());
+        }
+
+        phrase.resize (phrase.size() + static_cast<std::size_t> (sampleRate), 0.0f);
+        return phrase;
+    }
+
+    ChainMetrics renderChain (SubdAmpProcessor& processor, const ChainOrder& order, const std::vector<float>& input, double sampleRate)
+    {
+        constexpr int block = 256;
+        processor.setChainOrder (order);
+        processor.prepareToPlay (sampleRate, block); // l'ordre s'applique directement, état remis à zéro
+
+        juce::AudioBuffer<float> buffer (2, block);
+        juce::MidiBuffer midi;
+        std::vector<float> left;
+        left.reserve (input.size());
+
+        for (std::size_t start = 0; start + block <= input.size(); start += block)
+        {
+            buffer.clear();
+            buffer.copyFrom (0, 0, input.data() + start, block);
+            processor.processBlock (buffer, midi);
+            left.insert (left.end(), buffer.getReadPointer (0), buffer.getReadPointer (0) + block);
+        }
+
+        ChainMetrics metrics;
+        const auto playingEnd = input.size() - static_cast<std::size_t> (sampleRate);
+        const auto window = static_cast<std::size_t> (sampleRate * 0.01);
+        double recent = 0.0;
+        bool inDrop = false;
+        double playing = 0.0, tail = 0.0;
+
+        for (std::size_t i = 0; i < left.size(); ++i)
+        {
+            const auto s = left[i];
+            metrics.finite = metrics.finite && std::isfinite (s);
+            metrics.peak = std::max (metrics.peak, std::abs (s));
+            (i < playingEnd ? playing : tail) += static_cast<double> (s) * s;
+        }
+
+        metrics.playingRms = std::sqrt (playing / static_cast<double> (playingEnd));
+        metrics.tailRms = std::sqrt (tail / static_cast<double> (left.size() - playingEnd));
+
+        // Coupures : le niveau de sortie s'effondre (-30 dB en 10 ms) pendant que la guitare joue.
+        for (std::size_t start = window * 10; start + window <= playingEnd; start += window)
+        {
+            double energy = 0.0, local = 0.0;
+
+            for (std::size_t i = start; i < start + window; ++i)
+                energy += static_cast<double> (left[i]) * left[i];
+
+            const auto level = std::sqrt (energy / static_cast<double> (window));
+            const auto drop = recent > 1.0e-3 && level < recent * 0.03;
+
+            if (drop && ! inDrop)
+                ++metrics.dropouts;
+
+            inDrop = drop;
+
+            if (! drop)
+                recent = 0.6 * recent + 0.4 * level;
+
+            // Saut d'un échantillon au suivant comparé au niveau de la fenêtre (clic)
+            for (std::size_t i = start + 1; i < start + window; ++i)
+                local = std::max (local, static_cast<double> (std::abs (left[i] - left[i - 1])));
+
+            if (level > 1.0e-3)
+                metrics.maxJumpRatio = std::max (metrics.maxJumpRatio, static_cast<float> (local / level));
+        }
+
+        return metrics;
+    }
+
+    void enableEverything (SubdAmpProcessor& processor)
+    {
+        for (const auto& info : moduleInfos)
+            setParameter (processor, info.enabledParameter, 1.0f);
+
+        setParameter (processor, params::id::whMode, 0.0f);       // WHAMMY fixe
+        setParameter (processor, params::id::whInterval, 12.0f);
+        setParameter (processor, params::id::whMix, 50.0f);
+        setParameter (processor, params::id::fsMix, 30.0f);
+        setParameter (processor, params::id::fsShift, 7.0f);
+        setParameter (processor, params::id::poLevel2, 40.0f);
+    }
+
+    juce::String describe (const ChainOrder& order)
+    {
+        juce::StringArray names;
+
+        for (const auto module : order)
+            names.add (infoFor (module).pedalName);
+
+        return names.joinIntoString (" > ");
+    }
+}
+
+TEST_CASE ("Ordres de la chaîne : paires, places, permutations (rapport)", "[.][combinations]")
+{
+    JuceEnvironment juce;
+    constexpr double sampleRate = 48000.0;
+    const auto input = chainTestPhrase (sampleRate);
+    auto processor = createProcessor();
+
+    struct Row { juce::String label; ChainMetrics metrics; };
+    std::vector<Row> rows;
+
+    // 1. Chaque paire ordonnée, seule allumée (les autres arrêtés)
+    for (const auto& first : moduleInfos)
+        for (const auto& second : moduleInfos)
+        {
+            if (first.id == second.id)
+                continue;
+
+            for (const auto& info : moduleInfos)
+                setParameter (*processor, info.enabledParameter, info.id == first.id || info.id == second.id ? 1.0f : 0.0f);
+
+            auto order = withModuleMoved (defaultChainOrder, first.id, 0);
+            order = withModuleMoved (order, second.id, 1);
+            rows.push_back ({ juce::String ("paire ") + first.pedalName + " > " + second.pedalName,
+                              renderChain (*processor, order, input, sampleRate) });
+        }
+
+    // 2. Tous allumés, chaque module à chaque place
+    enableEverything (*processor);
+
+    for (const auto& info : moduleInfos)
+        for (std::size_t place = 0; place < numModules; ++place)
+        {
+            const auto order = withModuleMoved (defaultChainOrder, info.id, place);
+            rows.push_back ({ "place " + describe (order), renderChain (*processor, order, input, sampleRate) });
+        }
+
+    // 3. Permutations complètes au hasard (graine fixe : reproductible)
+    std::mt19937 random (2026);
+
+    for (int i = 0; i < 200; ++i)
+    {
+        auto order = defaultChainOrder;
+        std::shuffle (order.begin(), order.end(), random);
+        rows.push_back ({ "aléatoire " + describe (order), renderChain (*processor, order, input, sampleRate) });
+    }
+
+    // Rapport : les cas suspects d'abord
+    int suspicious = 0;
+
+    for (const auto& row : rows)
+    {
+        const auto& m = row.metrics;
+        const auto bad = ! m.finite || m.peak > 2.0f || m.playingRms < 0.01 || m.dropouts > 0 || m.maxJumpRatio > 8.0f;
+
+        if (bad)
+        {
+            ++suspicious;
+            std::printf ("SUSPECT %s : fini=%d crête=%.2f rms=%.4f queue=%.4f coupures=%d saut=%.1f\n",
+                         row.label.toRawUTF8(), m.finite, m.peak, m.playingRms, m.tailRms, m.dropouts, m.maxJumpRatio);
+        }
+    }
+
+    std::printf ("%zu rendus, %d suspects\n", rows.size(), suspicious);
+    SUCCEED();
+}
+
+TEST_CASE ("Niveau de chaque module seul, à son MIX par défaut (rapport)", "[.][combinations]")
+{
+    JuceEnvironment juce;
+    constexpr double sampleRate = 48000.0;
+    const auto input = chainTestPhrase (sampleRate);
+    auto processor = createProcessor();
+
+    for (const auto& info : moduleInfos)
+        setParameter (*processor, info.enabledParameter, 0.0f);
+
+    const auto reference = renderChain (*processor, defaultChainOrder, input, sampleRate).playingRms;
+
+    for (const auto& module : moduleInfos)
+    {
+        for (const auto& info : moduleInfos)
+            setParameter (*processor, info.enabledParameter, info.id == module.id ? 1.0f : 0.0f);
+
+        const auto level = renderChain (*processor, defaultChainOrder, input, sampleRate).playingRms;
+        std::printf ("%-10s MIX %3.0f %%  : %+5.1f dB\n", module.pedalName, 100.0 * processor->getModuleMix (module.id),
+                     20.0 * std::log10 (level / reference));
+    }
+
+    SUCCEED();
+}
+
+TEST_CASE ("Suivi de l'HARMONIZER selon le module placé avant lui (rapport)", "[.][combinations]")
+{
+    JuceEnvironment juce;
+    constexpr double sampleRate = 48000.0;
+    const auto input = chainTestPhrase (sampleRate);
+    auto processor = createProcessor();
+    processor->prepareToPlay (sampleRate, 256);
+
+    for (const auto& before : moduleInfos)
+    {
+        if (before.id == ModuleId::harmonizer)
+            continue;
+
+        for (const auto& info : moduleInfos)
+            setParameter (*processor, info.enabledParameter, info.id == before.id || info.id == ModuleId::harmonizer ? 1.0f : 0.0f);
+
+        processor->setChainOrder (withModuleMoved (withModuleMoved (defaultChainOrder, before.id, 0), ModuleId::harmonizer, 1));
+        processor->prepareToPlay (sampleRate, 256);
+
+        juce::AudioBuffer<float> buffer (2, 256);
+        juce::MidiBuffer midi;
+        int tracked = 0, playing = 0;
+        const auto playingEnd = input.size() - static_cast<std::size_t> (sampleRate);
+
+        for (std::size_t start = 0; start + 256 <= playingEnd; start += 256)
+        {
+            buffer.clear();
+            buffer.copyFrom (0, 0, input.data() + start, 256);
+            processor->processBlock (buffer, midi);
+            ++playing;
+            tracked += processor->getTelemetry().harmonyNote.load() >= 0 ? 1 : 0;
+        }
+
+        std::printf ("%-8s avant HARMO : note suivie %3d %% du temps\n", before.pedalName, 100 * tracked / playing);
+    }
+
+    SUCCEED();
+}
+
+TEST_CASE ("Ordres de la chaîne : aucune combinaison ne casse le son (paires, places, permutations)", "[processor][combinations-quick]")
+{
+    // Régression : avec le mélange linéaire, chaque module dosé faisait perdre 3 à 6 dB ; une
+    // chaîne complète tombait à -30 dB (et le GATE, placé tard, se mettait à couper).
+    JuceEnvironment juce;
+    constexpr double sampleRate = 48000.0;
+    const auto input = chainTestPhrase (sampleRate);
+    auto processor = createProcessor();
+
+    for (const auto& info : moduleInfos)
+        setParameter (*processor, info.enabledParameter, 0.0f);
+
+    const auto reference = renderChain (*processor, defaultChainOrder, input, sampleRate).playingRms;
+
+    const auto check = [&] (const ChainOrder& order, double minimumLevel)
+    {
+        const auto m = renderChain (*processor, order, input, sampleRate);
+        INFO (describe (order) << " : crête " << m.peak << ", niveau " << 20.0 * std::log10 (m.playingRms / reference)
+                               << " dB, coupures " << m.dropouts << ", saut " << m.maxJumpRatio);
+        REQUIRE (m.finite);
+        REQUIRE (m.peak < 2.0f);
+        REQUIRE (m.playingRms > minimumLevel * reference);
+        REQUIRE (m.dropouts == 0);
+        REQUIRE (m.maxJumpRatio < 10.0f);
+    };
+
+    // Chaque paire ordonnée, seule allumée : jamais plus de 6 dB de perte.
+    for (const auto& first : moduleInfos)
+        for (const auto& second : moduleInfos)
+        {
+            if (first.id == second.id)
+                continue;
+
+            for (const auto& info : moduleInfos)
+                setParameter (*processor, info.enabledParameter, info.id == first.id || info.id == second.id ? 1.0f : 0.0f);
+
+            check (withModuleMoved (withModuleMoved (defaultChainOrder, first.id, 0), second.id, 1), 0.5);
+        }
+
+    // Tout allumé : chaque module en tête et en fin de chaîne, plus des ordres au hasard ;
+    // jamais plus de 10,5 dB de perte, malgré onze modules empilés (dont les pertes voulues :
+    // octaves du SUB plus basses que le direct, filtrage du cab, voix du POLY à 60 %).
+    enableEverything (*processor);
+
+    for (const auto& info : moduleInfos)
+        for (const auto place : { std::size_t (0), numModules - 1 })
+            check (withModuleMoved (defaultChainOrder, info.id, place), 0.3);
+
+    std::mt19937 random (11);
+
+    for (int i = 0; i < 12; ++i)
+    {
+        auto order = defaultChainOrder;
+        std::shuffle (order.begin(), order.end(), random);
+        check (order, 0.3);
+    }
 }

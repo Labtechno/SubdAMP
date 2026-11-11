@@ -92,10 +92,16 @@ void Whammy::process (std::span<float> block) noexcept
         // Le shifter tourne toujours : sa mémoire reste à jour pour repartir sans trou.
         const auto shifted = shifter.process (dry, ratio);
 
+        // Près de l'unisson, le transposé ressemble au sec : il s'efface (pas de peigne) et le
+        // mélange est linéaire (pas de bosse). Ailleurs, puissance constante : à 50 %, le niveau
+        // reste celui du sec.
         const auto away = std::min (1.0f, std::fabs (currentSemitones) / unisonFadeSemitones);
-        const auto wet = dry + away * (shifted - dry);
+        const auto amount = mix.getNext() * away;
+        const auto angle = amount * 1.57079632679f;
+        const auto dryGain = (1.0f - away) * (1.0f - amount) + away * std::cos (angle);
+        const auto wetGain = (1.0f - away) * amount + away * std::sin (angle);
 
-        sample = dry + mix.getNext() * (wet - dry);
+        sample = dry * dryGain + shifted * wetGain;
     }
 }
 

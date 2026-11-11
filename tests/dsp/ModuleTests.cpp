@@ -317,3 +317,26 @@ TEST_CASE ("ChainSlot : le sec retardé du retard du module ne filtre pas en pei
 
     REQUIRE (rms (std::span<const float> { left }.subspan (4096)) == Catch::Approx (inputLevel).epsilon (0.01));
 }
+
+TEST_CASE ("ChainSlot : loi à puissance constante (sec × cos, traité × sin)", "[slot]")
+{
+    const auto mixValue = GENERATE (0.0f, 0.3f, 0.5f, 1.0f);
+
+    Inverter inverter;
+    ChainSlot slot (inverter);
+    slot.prepare ({ sr, blockSize });
+    slot.setMixLaw (ChainSlot::MixLaw::constantPower);
+    slot.setMix (mixValue);
+    slot.setEnabled (true);
+    slot.reset();
+
+    std::vector<float> left (1024, 0.5f), right (1024, 0.5f);
+    processInBlocks (slot, left, right, blockSize);
+
+    const auto angle = mixValue * 1.57079632679f;
+    REQUIRE (left.back() == Catch::Approx (0.5f * std::cos (angle) - 0.5f * std::sin (angle)).margin (1.0e-5f));
+
+    // À 50 %, deux signaux décorrélés de même niveau gardent la puissance du sec.
+    const auto [dry, wet] = ChainSlot::mixGains (0.5f, ChainSlot::MixLaw::constantPower);
+    REQUIRE (dry * dry + wet * wet == Catch::Approx (1.0f));
+}

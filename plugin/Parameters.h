@@ -77,8 +77,16 @@ namespace id
     inline constexpr const char* shInterval = "shInterval";
     inline constexpr const char* shDecay    = "shDecay";
     inline constexpr const char* shAmount   = "shAmount";
-    inline constexpr const char* shTone     = "shTone";
+    inline constexpr const char* shTone     = "shTone";     // COUPE-HAUT (identifiant d'origine conservé)
     inline constexpr const char* shMix      = "shMix";
+    inline constexpr const char* shMode     = "shMode";
+    inline constexpr const char* shSize     = "shSize";
+    inline constexpr const char* shDiffusion = "shDiffusion";
+    inline constexpr const char* shPreDelay = "shPreDelay";
+    inline constexpr const char* shModRate  = "shModRate";
+    inline constexpr const char* shModDepth = "shModDepth";
+    inline constexpr const char* shLowCut   = "shLowCut";
+    inline constexpr const char* shWidth    = "shWidth";
 
     // POLY (texture)
     inline constexpr const char* poEnabled   = "poEnabled";
@@ -126,6 +134,7 @@ inline constexpr int addedInVersion2 = 2;
 inline constexpr int addedInVersion3 = 3;
 inline constexpr int addedInVersion4 = 4;
 inline constexpr int addedInVersion5 = 5;
+inline constexpr int addedInVersion6 = 6;
 
 /** Intervalle de la boucle du SHIMMER, en demi-tons, pour chaque choix du paramètre shInterval. */
 float shimmerIntervalSemitones (int choiceIndex) noexcept;

@@ -15,8 +15,10 @@ void Harmonizer::prepare (const ProcessSpec& spec)
     sampleRate = spec.sampleRate;
     tracker.prepare (sampleRate);
 
-    // Historique : la plus vieille lecture remonte à environ 3,5 périodes de la note la plus grave.
-    history.assign (std::bit_ceil (static_cast<std::size_t> (4.0 * sampleRate / 60.0) + 64), 0.0f);
+    // Historique : 3,5 périodes de la note la plus grave, plus la tenue (45 ms) pendant
+    // laquelle on relit la dernière période suivie.
+    holdSamples = static_cast<int> (std::lround (0.045 * sampleRate));
+    history.assign (std::bit_ceil (static_cast<std::size_t> (4.0 * sampleRate / 60.0) + static_cast<std::size_t> (holdSamples) + 64), 0.0f);
     historyMask = history.size() - 1;
 
     for (int i = 0; i <= hannSize; ++i)
@@ -41,7 +43,9 @@ void Harmonizer::reset() noexcept
     written = 0;
 
     haveMark = false;
+    marksStale = false;
     nextMarkExact = -1.0;
+    holdRemaining = 0;
     currentNote = -1;
 
     for (auto& voice : voices)
@@ -131,9 +135,30 @@ void Harmonizer::onNewEstimate() noexcept
 {
     if (! tracker.isVoiced())
     {
-        haveMark = false;
-        nextMarkExact = -1.0;
+        // Suivi perdu : on garde la dernière marque, relue pendant la tenue.
+        if (haveMark && ! marksStale)
+        {
+            marksStale = true;
+            holdRemaining = holdSamples;
+        }
+
         return;
+    }
+
+    // Suivi retrouvé : même note (période à 3 % près, dans la tenue) → les marques continuent ;
+    // sinon nouvelle note → nouvelles marques, les grains en cours finissent en fondu.
+    if (marksStale)
+    {
+        const auto samePeriod = std::abs (tracker.getPeriod() - lastMarkPeriod) < 0.03f * lastMarkPeriod;
+
+        if (! samePeriod || holdRemaining <= 0)
+        {
+            haveMark = false;
+            nextMarkExact = -1.0;
+        }
+
+        marksStale = false;
+        holdRemaining = 0;
     }
 
     // Note la plus proche, avec 0,1 demi-ton d'hystérésis : un vibrato ou un bend léger
@@ -244,9 +269,19 @@ float Harmonizer::hann (float phase) const noexcept
     return a + fraction * (hannTable[static_cast<std::size_t> (index) + 1] - a);
 }
 
+bool Harmonizer::canReadFrozenPeriod (std::int64_t now) const noexcept
+{
+    // La période relue (deux périodes autour de la dernière marque) doit encore être dans l'historique.
+    const auto oldest = static_cast<double> (lastMark) - 2.0 * static_cast<double> (lastMarkPeriod);
+    return static_cast<double> (now) - oldest < static_cast<double> (history.size()) - 8.0;
+}
+
 float Harmonizer::renderVoice (Voice& voice, std::int64_t now) noexcept
 {
-    const auto active = voice.steps.has_value() && tracker.isVoiced() && haveMark;
+    // Note suivie, ou tenue après une perte passagère : la voix continue.
+    const auto tracking = tracker.isVoiced() && haveMark && ! marksStale;
+    const auto holding = marksStale && holdRemaining > 0 && haveMark && canReadFrozenPeriod (now);
+    const auto active = voice.steps.has_value() && (tracking || holding);
 
     if (active)
     {
@@ -287,7 +322,8 @@ float Harmonizer::renderVoice (Voice& voice, std::int64_t now) noexcept
     // Égalisation du niveau : selon l'intervalle et la forme d'onde, le PSOLA peut perdre
     // quelques dB (octave en dessous surtout). La voix est ramenée au niveau de la note jouée,
     // dans une plage de ±6 dB, avec un temps de réponse lent (pas de pompage audible).
-    if (active)
+    // Figée pendant la tenue : l'entrée est alors l'attaque de la note suivante.
+    if (tracking)
     {
         voice.energy += levelFollow * (sum * sum - voice.energy);
         const auto wanted = std::sqrt (inputEnergy / std::max (voice.energy, 1.0e-12f));
@@ -313,7 +349,11 @@ void Harmonizer::process (std::span<float> block) noexcept
         if (tracker.takeNewEstimate())
             onNewEstimate();
 
-        placeMarks (now);
+        if (holdRemaining > 0)
+            --holdRemaining;
+
+        if (! marksStale)
+            placeMarks (now);
 
         float harmony = 0.0f;
 

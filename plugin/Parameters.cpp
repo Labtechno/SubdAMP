@@ -250,9 +250,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         makeFloat (id::shDecay, addedInVersion4, utf8 ("SHIMMER durée"),
                    { 0.5f, 30.0f, 0.1f, 0.4f }, 6.0f, "s", formatSeconds),
         makePercent (id::shAmount, "SHIMMER shimmer", 50.0f, 100.0f, addedInVersion4),
-        makeFloat (id::shTone, addedInVersion4, utf8 ("SHIMMER tonalité"),
+        makeFloat (id::shTone, addedInVersion4, utf8 ("SHIMMER coupe-haut"),
                    { 500.0f, 16000.0f, 1.0f, 0.3f }, 6000.0f, "Hz", formatHertz),
-        makeMix (id::shMix, "SHIMMER", 30.0f)));
+        makeMix (id::shMix, "SHIMMER", 30.0f),
+        // Réglages ajoutés en version 6 : leurs valeurs par défaut redonnent le son d'avant
+        // (taille 1, diffusion 0,65, modulation 6 échantillons à 0,4 Hz, coupe-bas 50 Hz).
+        makeChoice (id::shMode, "SHIMMER mode", { "Simple", utf8 ("Double ±") }, 0, addedInVersion6),
+        makePercent (id::shSize, "SHIMMER taille", 50.0f, 100.0f, addedInVersion6),
+        makePercent (id::shDiffusion, "SHIMMER diffusion", 80.0f, 100.0f, addedInVersion6),
+        makeFloat (id::shPreDelay, addedInVersion6, utf8 ("SHIMMER pré-délai"),
+                   { 0.0f, 500.0f, 1.0f, 0.5f }, 0.0f, "ms", formatMilliseconds),
+        makeFloat (id::shModRate, addedInVersion6, "SHIMMER vitesse de modulation",
+                   { 0.05f, 5.0f, 0.01f, 0.35f }, 0.4f, "Hz", formatHertz),
+        makePercent (id::shModDepth, "SHIMMER profondeur de modulation", 30.0f, 100.0f, addedInVersion6),
+        makeFloat (id::shLowCut, addedInVersion6, "SHIMMER coupe-bas",
+                   { 20.0f, 1000.0f, 1.0f, 0.3f }, 50.0f, "Hz", formatHertz),
+        makePercent (id::shWidth, "SHIMMER largeur", 100.0f, 100.0f, addedInVersion6)));
 
     layout.add (group ("poly", "POLY",
         makeSwitch (id::poEnabled, addedInVersion4, "POLY", false),
