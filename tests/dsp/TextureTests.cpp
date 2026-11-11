@@ -1,5 +1,6 @@
 #include "TestSignals.h"
 
+#include "subdamp/dsp/ChainSlot.h"
 #include "subdamp/dsp/Fft.h"
 #include "subdamp/dsp/GranularCloud.h"
 #include "subdamp/dsp/PolyShifter.h"
@@ -11,6 +12,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <complex>
+#include <functional>
+#include <numbers>
 #include <random>
 
 using namespace subdamp::dsp;
@@ -168,7 +171,34 @@ TEST_CASE ("SHIMMER : la boucle ajoute l'octave au-dessus dans la queue", "[shim
     REQUIRE (shimmering > 10.0 * plain);
 }
 
-TEST_CASE ("SHIMMER : même au maximum, la boucle reste bornée", "[shimmer]")
+TEST_CASE ("SHIMMER : au maximum, la queue finit toujours par s'éteindre", "[shimmer]")
+{
+    // Régression : dans la première version, le continu et l'extrême grave tournaient dans la
+    // boucle sans jamais monter : la queue grossissait jusqu'à la saturation et ne s'arrêtait plus.
+    for (const auto interval : { 12.0f, 19.0f, 24.0f, 7.0f, -12.0f })
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setDecaySeconds (2.0f);
+        reverb.setShimmer (1.0f);
+        reverb.setToneHz (16000.0f);
+        reverb.setInterval (interval);
+        reverb.reset();
+
+        auto input = pluckedString (290, sr, static_cast<int> (sr * 14.0), 0.5f); // ≈ 165 Hz
+        std::fill (input.begin() + static_cast<std::ptrdiff_t> (sr), input.end(), 0.0f);
+
+        const auto out = render (reverb, input);
+        const auto playing = rms (slice (out.left, 0.2, 1.0));
+        const auto tail = rms (slice (out.left, 13.0, 14.0));
+
+        INFO ("Intervalle " << interval << " : " << db (tail / playing) << " dB après 12 s de silence");
+        REQUIRE (tail < playing * 1.0e-3); // -60 dB
+        REQUIRE (peakAbs (out.left) < 1.0);
+    }
+}
+
+TEST_CASE ("SHIMMER : ni continu ni grave accumulé, même réglé au plus long", "[shimmer]")
 {
     ShimmerReverb reverb;
     reverb.prepare ({ sr, blockSize });
@@ -177,11 +207,97 @@ TEST_CASE ("SHIMMER : même au maximum, la boucle reste bornée", "[shimmer]")
     reverb.setToneHz (16000.0f);
     reverb.reset();
 
-    const auto out = render (reverb, noise (static_cast<std::size_t> (sr * 8.0), 0.5f));
+    // Bruit soutenu, avec un décalage continu (offset d'une carte son) : le pire cas.
+    auto input = noise (static_cast<std::size_t> (sr * 10.0), 0.5f);
+
+    for (auto& s : input)
+        s += 0.1f;
+
+    const auto out = render (reverb, input);
 
     REQUIRE (std::all_of (out.left.begin(), out.left.end(), [] (float s) { return std::isfinite (s); }));
-    REQUIRE (peakAbs (out.left) < 10.0);
-    REQUIRE (peakAbs (out.right) < 10.0);
+
+    const auto mean = [] (std::span<const float> signal)
+    {
+        double sum = 0.0;
+
+        for (const auto s : signal)
+            sum += s;
+
+        return sum / static_cast<double> (signal.size());
+    };
+
+    const auto early = rms (slice (out.left, 2.0, 4.0));
+    const auto late = rms (slice (out.left, 8.0, 10.0));
+    INFO ("Niveau : " << db (early) << " dB à 2-4 s, " << db (late) << " dB à 8-10 s");
+
+    REQUIRE (late < 1.5 * early);                                 // pas d'emballement
+    REQUIRE (std::abs (mean (slice (out.left, 5.0, 10.0))) < 0.005); // pas de continu
+    REQUIRE (std::abs (mean (slice (out.right, 5.0, 10.0))) < 0.005);
+    REQUIRE (peakAbs (out.left) < 1.5);
+    REQUIRE (peakAbs (out.right) < 1.5);
+}
+
+TEST_CASE ("SHIMMER : la queue reste harmonique (aucun repliement)", "[shimmer]")
+{
+    // Une note à 1 kHz : toute la queue doit tomber sur 1 kHz × rapport^k. Un repliement ou des
+    // artefacts de transposition mettraient de l'énergie ailleurs, et la boucle les accumulerait.
+    for (const auto interval : { 12.0f, 7.0f, 24.0f })
+    {
+        ShimmerReverb reverb;
+        reverb.prepare ({ sr, blockSize });
+        reverb.setDecaySeconds (4.0f);
+        reverb.setShimmer (1.0f);
+        reverb.setToneHz (16000.0f);
+        reverb.setInterval (interval);
+        reverb.reset();
+
+        auto input = sine (1000.0, sr, static_cast<int> (sr * 3.0), 0.3f);
+        std::fill (input.begin() + static_cast<std::ptrdiff_t> (sr * 0.5), input.end(), 0.0f);
+        const auto out = render (reverb, input);
+
+        constexpr int size = 65536;
+        Fft fft;
+        fft.prepare (size);
+        std::vector<std::complex<float>> spectrum (size);
+        const auto tail = slice (out.left, 1.5, 3.0);
+
+        for (std::size_t i = 0; i < spectrum.size(); ++i)
+        {
+            const auto window = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * static_cast<double> (i) / size);
+            spectrum[i] = { i < tail.size() ? static_cast<float> (window * tail[i]) : 0.0f, 0.0f };
+        }
+
+        fft.forward (spectrum.data());
+
+        const auto ratio = std::pow (2.0, interval / 12.0);
+        double harmonic = 0.0, total = 0.0;
+
+        for (int bin = 1; bin < size / 2; ++bin)
+        {
+            const auto frequency = bin * sr / size;
+
+            if (frequency < 100.0)
+                continue;
+
+            const auto power = static_cast<double> (std::norm (spectrum[static_cast<std::size_t> (bin)]));
+            total += power;
+
+            for (int k = -6; k < 10; ++k)
+            {
+                const auto target = 1000.0 * std::pow (ratio, k);
+
+                if (std::abs (frequency - target) < std::max (40.0, 0.02 * target))
+                {
+                    harmonic += power;
+                    break;
+                }
+            }
+        }
+
+        INFO ("Intervalle " << interval << " : " << 100.0 * harmonic / total << " % de l'énergie sur les harmoniques attendues");
+        REQUIRE (harmonic > 0.97 * total);
+    }
 }
 
 TEST_CASE ("SHIMMER : sortie large (gauche et droite décorrélées)", "[shimmer]")
@@ -357,47 +473,95 @@ TEST_CASE ("GRANULAR stutter : calé sur la grille du DAW en lecture", "[granula
 }
 
 //==============================================================================
-TEST_CASE ("TextureSlot : arrêtée, la texture laisse finir sa queue puis ne coûte plus rien", "[texture-slot]")
+TEST_CASE ("ChainSlot (texture) : arrêtée, la texture laisse finir sa queue puis ne coûte plus rien", "[slot]")
 {
     ShimmerReverb reverb;
-    TextureSlot slot (reverb);
+    ChainSlot slot (reverb);
     slot.prepare ({ sr, blockSize });
     reverb.setDecaySeconds (0.5f);
     reverb.setShimmer (0.0f);
-    slot.setLevel (1.0f);
+    slot.setMix (1.0f);
 
     std::vector<float> left (blockSize), right (blockSize);
     const auto block = sine (220.0, sr, blockSize, 0.3f);
+    const auto play = [&]
+    {
+        std::copy (block.begin(), block.end(), left.begin());
+        std::copy (block.begin(), block.end(), right.begin());
+        slot.process (left, right);
+    };
 
-    // Arrêtée dès le départ : aucun effet.
-    slot.process (block, left, right);
-    REQUIRE (slot.isSleeping());
-    REQUIRE (peakAbs (left) == 0.0);
+    // Arrêtée dès le départ : le signal passe intact.
+    play();
+    REQUIRE (slot.isIdle());
+    REQUIRE (left == block);
 
-    // En marche : la réverbe s'ajoute.
+    // En marche, MIX 100 % : seule la réverbe sort.
     slot.setEnabled (true);
 
     for (int i = 0; i < 200; ++i)
-    {
-        std::fill (left.begin(), left.end(), 0.0f);
-        slot.process (block, left, right);
-    }
+        play();
 
     REQUIRE (peakAbs (left) > 0.01);
 
-    // Arrêt : la queue continue un moment...
+    // Arrêt : le jeu repasse en direct et la queue continue un moment par-dessus...
     slot.setEnabled (false);
-    std::fill (left.begin(), left.end(), 0.0f);
 
     for (int i = 0; i < 20; ++i)
-        slot.process (block, left, right);
+        play();
 
-    REQUIRE (peakAbs (left) > 0.0);
-    REQUIRE_FALSE (slot.isSleeping());
+    std::vector<float> tailLeft (blockSize);
+    std::transform (left.begin(), left.end(), block.begin(), tailLeft.begin(), std::minus<float>());
+    REQUIRE (peakAbs (tailLeft) > 0.0);
+    REQUIRE_FALSE (slot.isIdle());
 
-    // ...puis, une fois éteinte, la texture n'est plus calculée.
+    // ...puis, une fois éteinte, la texture n'est plus calculée et le signal est intact.
     for (int i = 0; i < 2000; ++i)
-        slot.process (block, left, right);
+        play();
 
-    REQUIRE (slot.isSleeping());
+    REQUIRE (slot.isIdle());
+    REQUIRE (left == block);
+}
+
+TEST_CASE ("ChainSlot (texture) : sortie = sec × (1 − MIX) + texture × MIX, en stéréo", "[slot]")
+{
+    // Texture de test : renvoie +1 à gauche, -1 à droite.
+    struct Constant final : StereoTexture
+    {
+        void prepare (const ProcessSpec&) override {}
+        void reset() noexcept override {}
+        void process (std::span<const float>, std::span<float> l, std::span<float> r) noexcept override
+        {
+            std::fill (l.begin(), l.end(), 1.0f);
+            std::fill (r.begin(), r.end(), -1.0f);
+        }
+    };
+
+    Constant constant;
+    ChainSlot slot (constant);
+    slot.prepare ({ sr, blockSize });
+    slot.setMix (0.25f);
+    slot.setEnabled (true);
+    slot.reset();
+
+    std::vector<float> left (blockSize, 0.4f), right (blockSize, 0.4f);
+
+    for (int i = 0; i < 20; ++i)
+    {
+        std::fill (left.begin(), left.end(), 0.4f);
+        std::fill (right.begin(), right.end(), 0.4f);
+        slot.process (left, right);
+    }
+
+    REQUIRE (left.back() == Catch::Approx (0.4f * 0.75f + 0.25f));
+    REQUIRE (right.back() == Catch::Approx (0.4f * 0.75f - 0.25f));
+
+    // FREEZE : la nappe s'ajoute au jeu, qui n'est jamais atténué.
+    slot.setWetAddsToDry (true);
+    std::fill (left.begin(), left.end(), 0.4f);
+    std::fill (right.begin(), right.end(), 0.4f);
+    slot.process (left, right);
+
+    REQUIRE (left.back() == Catch::Approx (0.4f + 0.25f));
+    REQUIRE (right.back() == Catch::Approx (0.4f - 0.25f));
 }

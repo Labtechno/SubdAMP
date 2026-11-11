@@ -3,35 +3,48 @@
 Plugin guitare (VST3 + application standalone) orienté pitch : octaver, whammy,
 harmonizer, frequency shifter, shimmer, textures. Usage personnel.
 
-**État : étape 4.** Chaîne `entrée → GATE → [avant l'ampli] → AMPLI → CAB → [après l'ampli] → sortie`,
-plus un bus de 4 TEXTURES en parallèle, en stéréo.
+**État : étape 4 + chaîne en série.** Les 11 modules sont en série, dans l'ordre de ton choix
+(glisser une pédale pour la déplacer). Chacun a un potard **MIX** : `sortie = sec × (1 − MIX) + traité × MIX`.
+Le signal est stéréo de bout en bout.
 
 | Module | Rôle | Latence |
 |---|---|---|
 | GATE | Noise gate à hystérésis, ouverture instantanée, relâchement réglable | LIVE (0) |
 | SUB | Octaver analogique façon OC-2 : -1 et -2 octaves, +1 octave (fuzz), tonalité | LIVE (0) |
 | WHAMMY | Transposition polyphonique ±2 octaves ; mode fixe ou glissement relancé à chaque attaque | JOUABLE (15 ms) |
-| HARMONIZER | 2 voix diatoniques (tonalité + gamme), formants réglables ; son direct sans latence | JOUABLE (≈ 1,5 à 2,5 périodes : 5 à 25 ms) |
+| HARMONIZER | 2 voix diatoniques (tonalité + gamme), formants réglables ; la part sèche du MIX reste sans latence | JOUABLE (≈ 1,5 à 2,5 périodes : 5 à 25 ms) |
 | AMPLI | Capture Neural Amp Modeler (`.nam`) + gain, égaliseur 3 bandes, niveau | LIVE (0 à 48 kHz, < 1 ms sinon) |
 | CAB | Réponse impulsionnelle (`.wav`, `.aif`), ou cab interne par filtres | LIVE (0) |
 | FREQ SHIFT | Décaleur de fréquence (type Bode), mix, réinjection | LIVE (≈ 0) |
-| SHIMMER | Réverbe (réseau de 8 lignes) dont la queue est transposée en boucle : +octave, +octave et quinte… | TEXTURE |
+| SHIMMER | Réverbe (réseau de 8 lignes) dont la queue est transposée en boucle : +octave, +octave et quinte… | TEXTURE (≈ 30 ms à MIX 100 %) |
 | POLY | Transposition polyphonique haute qualité (Signalsmith Stretch), 2 voix en stéréo, formants | TEXTURE (≈ 150 ms) |
-| FREEZE | Bouton FIGER : le son du moment est tenu en nappe infinie (gel spectral) ; attaque, relâche, tonalité | TEXTURE |
+| FREEZE | Bouton FIGER : le son du moment est tenu en nappe infinie (gel spectral) ; le MIX dose la nappe, le jeu passe toujours | TEXTURE |
 | GRANULAR | Grains des 8 dernières secondes : nuage dispersé, ou stutter calé sur le tempo (grille du DAW en lecture) | TEXTURE |
 
-SUB, WHAMMY, HARMONIZER et FREQ SHIFT se placent avant ou après l'ampli (bouton sur leur
-panneau), sans clic. Dans un même emplacement, l'ordre est SUB → WHAMMY → HARMONIZER → FREQ SHIFT.
+**Chaîne en série** : l'ordre se change en glissant une pédale avant ou après une autre ; il est
+enregistré avec la session ou le preset. Le changement passe par un fondu de 20 ms au plus (pas de
+« pop » comme en rebranchant de vraies pédales). Ordre d'un nouveau réglage :
+GATE → SUB → WHAMMY → AMPLI → CAB → HARMO → FREQ → POLY → GRAIN → FREEZE → SHIMMER.
 
-**Textures** : elles tournent en parallèle et ne retardent jamais le son direct. Chacune écoute
-au choix le signal avant l'ampli (guitare claire) ou en fin de chaîne. Arrêtées, elles laissent
-finir leur queue (comme une pédale en mode « trails ») puis ne coûtent plus rien. Le tempo
-utilisé est celui du DAW ; en standalone, celui du potard TEMPO du GRANULAR.
+**MIX** : à 100 %, seul le son traité sort ; à 0 %, le module est transparent. Quelques cas :
+- SUB et HARMONIZER : le traité ne contient que les voix (les anciens réglages DIRECT sont
+  remplacés par le MIX) ;
+- FREEZE : la nappe s'ajoute au jeu, qui n'est jamais atténué (MIX = niveau de la nappe) ;
+- AMPLI : si la capture est rééchantillonnée, la part sèche est retardée d'autant pour qu'un
+  mélange partiel ne filtre pas en peigne.
 
-**Interface** : pédalier en haut, chaîne principale dans son ordre réel et textures en dessous
-(clic sur une pédale pour ouvrir ses réglages, clic sur sa LED pour l'allumer). La couleur du
-haut de chaque pédale et les badges en haut à droite indiquent la latence : vert LIVE, orange
-JOUABLE, violet TEXTURE (le badge violet n'apparaît que si une texture est allumée).
+**Textures** (SHIMMER, POLY, FREEZE, GRANULAR) : elles sortent en stéréo. Un module mono placé
+après elles (ampli, cab…) traite la somme mono, et la part sèche de son MIX garde la stéréo
+(comme sur un Helix). Une texture à MIX partiel ne retarde pas le son direct ; à MIX 100 %, il n'y
+a plus de son direct et tout ce qui suit attend sa latence (POLY ≈ 150 ms) : le badge passe alors
+en TEXTURE. Arrêtées, les textures laissent finir leur queue (mode « trails ») puis ne coûtent
+plus rien. Le tempo utilisé est celui du DAW ; en standalone, celui du potard TEMPO du GRANULAR.
+
+**Interface** : pédalier en haut, dans l'ordre réel de la chaîne (clic sur une pédale : ses
+réglages ; clic sur sa LED : marche / arrêt ; glisser : changer de place). Le MIX s'affiche sur
+la pédale quand il n'est pas à 100 %. La couleur du haut de chaque pédale et les badges en haut
+à droite indiquent la latence : vert LIVE, orange JOUABLE, violet TEXTURE (badge violet séparé
+quand des textures sont mélangées au son direct).
 
 ### Comment marchent les modules de pitch
 
@@ -42,6 +55,12 @@ JOUABLE, violet TEXTURE (le badge violet n'apparaît que si une texture est allu
   demi-ton, de 60 à 1400 Hz) et synthèse TD-PSOLA, qui garde le timbre de la note. Les voix
   suivent les bends et le vibrato ; le niveau de chaque voix est ramené à celui de la note jouée.
   Monophonique : jouer des notes isolées. Placé après l'ampli par défaut (harmonies plus nettes).
+- **SHIMMER** : à chaque tour, la queue de la réverbe passe par un transpositeur (vocodeur de
+  phase Signalsmith, sans repliement) puis par un passe-haut à 150 Hz. Ce filtre est essentiel :
+  la transposition déplace toutes les fréquences sauf le grave extrême, qui sinon tourne sans fin
+  dans la boucle et sature (c'était le défaut de la première version). Au maximum, chaque
+  génération garde 80 % de l'énergie de la précédente : nappe longue, jamais d'emballement.
+  Les aigus au-dessus de TONALITÉ s'éteignent deux fois plus vite que les graves.
 
 ## Captures d'amplis et IR
 
@@ -112,9 +131,9 @@ Sur macOS, ajouter `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` pour un binaire un
 ```
 dsp/          C++ pur, sans JUCE, testable unitairement : modules (gate, SUB, WHAMMY,
               HARMONIZER, FREQ SHIFT, ampli NAM, égaliseur), textures (SHIMMER, POLY,
-              FREEZE, GRANULAR), détection de hauteur, FFT, rééchantillonnage,
-              échange temps réel des captures
-plugin/       AudioProcessor, paramètres, chaîne, cab (convolution JUCE), presets
+              FREEZE, GRANULAR), emplacement de chaîne (marche / arrêt, MIX),
+              détection de hauteur, FFT, rééchantillonnage, échange temps réel des captures
+plugin/       AudioProcessor, paramètres, ordre de la chaîne, cab (convolution JUCE), presets
 gui/          interface du plugin (pédalier, panneaux de modules, sélecteurs de fichiers)
 standalone/   application standalone : carte son, canal guitare, réglages
 third_party/  compilation de NeuralAmpModelerCore
@@ -130,13 +149,16 @@ les allocations : toute allocation dans le traitement audio fait échouer les te
 - **Thread audio** : aucune allocation, aucun verrou, aucun log, aucune I/O dans
   `processBlock` ni dans le callback audio du standalone. Tous les tampons sont
   préalloués dans `prepareToPlay` / `audioDeviceAboutToStart`.
-- **Le son sec n'attend jamais** : les modules lents (badge TEXTURE) tournent en
-  parallèle et leur latence n'est pas reportée au DAW.
+- **Le son sec n'attend pas les textures** : leur latence n'est pas compensée dans leur MIX
+  ni reportée au DAW (seule celle d'une capture rééchantillonnée l'est).
 - **Paramètres** : les identifiants (`plugin/Parameters.h`) ne sont jamais renommés.
 - **Presets** : l'état porte un numéro de version (`plugin/StateVersioning.h`). Un
   paramètre ajouté reprend sa valeur par défaut au chargement d'un ancien preset ;
   un changement incompatible ajoute une étape de migration.
-- **Signal** : traitement mono (canal gauche si la piste est stéréo), sortie recopiée en stéréo.
+- **Signal** : entrée mono (canal gauche si la piste est stéréo), chaîne stéréo ; chaque
+  module mono traite la somme (L + R) / 2.
+- **Ordre de la chaîne** : propriété `chainOrder` de l'état (noms en toutes lettres, lecture
+  tolérante), transmise au thread audio par un atomic de 64 bits.
 
 ## Licences des dépendances
 

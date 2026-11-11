@@ -15,7 +15,8 @@ namespace subdamp::gui
 
 /**
     Interface du plugin, façon pédalier :
-      - en haut, l'entrée, le pédalier dans l'ordre réel de la chaîne, la sortie ;
+      - en haut, l'entrée, le pédalier dans l'ordre réel de la chaîne (glisser pour le changer),
+        la sortie ;
       - en dessous, les réglages complets du module sélectionné.
 
     L'interface ne lit l'audio qu'à travers des atomics (paramètres, vumètres, latences) :
@@ -38,12 +39,12 @@ private:
     float scale() const noexcept;
 
     void selectModule (ModuleId module);
-    std::vector<ModuleId> chainOrder() const;
+    void moveModule (ModuleId module, int newIndex);
     ModuleCard& cardFor (ModuleId module);
     void buildCards();
 
     static constexpr int baseWidth = 1200;
-    static constexpr int baseHeight = 660;
+    static constexpr int baseHeight = 600;
 
     SubdAmpProcessor& subdAmp;
     std::unique_ptr<LookAndFeel> lookAndFeel;
@@ -62,7 +63,7 @@ private:
     juce::AudioProcessorValueTreeState::SliderAttachment inputAttachment, outputAttachment;
     juce::AudioProcessorValueTreeState::ButtonAttachment bypassAttachment;
 
-    std::vector<ModuleId> shownOrder;
+    ChainOrder shownOrder = defaultChainOrder;
     LatencyStatus shownLatency;
     double lastTimerSeconds = 0.0;
 

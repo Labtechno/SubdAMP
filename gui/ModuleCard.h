@@ -22,8 +22,8 @@ public:
 
 /**
     Panneau des réglages d'un module, affiché en grand sous le pédalier : titre, description,
-    badge de latence, interrupteur, éventuel sélecteur de position (avant / après l'ampli),
-    potards et listes déroulantes, et un composant libre (sélecteur de fichier de l'ampli et du cab).
+    badge de latence, interrupteur, potards et listes déroulantes, potard MIX à part à droite,
+    et un composant libre (sélecteur de fichier de l'ampli et du cab).
 
     Tout est relié aux paramètres par des attachements JUCE : l'automation du DAW et
     l'interface restent synchronisées sans code supplémentaire.
@@ -34,8 +34,7 @@ public:
     ModuleCard (juce::AudioProcessorValueTreeState& parameters,
                 const juce::String& title,
                 dsp::LatencyTier tier,
-                const char* enabledParameterId,
-                const char* positionParameterId = nullptr);
+                const char* enabledParameterId);
 
     ~ModuleCard() override;
 
@@ -45,8 +44,8 @@ public:
     /** Gros bouton à bascule (FIGER du FREEZE), relié à un paramètre booléen. */
     void addToggle (const char* parameterId, const juce::String& label, int baseWidth = 150);
 
-    /** Textes du bouton de position, selon son état (par défaut : avant / après l'ampli). */
-    void setPositionLabels (const juce::String& whenOff, const juce::String& whenOn, int baseWidth = 128);
+    /** Potard MIX (dry / wet), isolé à droite des réglages. */
+    void setMixKnob (const char* parameterId);
 
     void setDescription (const juce::String& text) { description = text; repaint(); }
 
@@ -76,7 +75,8 @@ private:
     };
 
     Control& addControl (const juce::String& label, int baseWidth);
-    void updatePositionText();
+    std::unique_ptr<Control> makeKnob (const char* parameterId, const juce::String& label);
+    void layoutControl (Control& control, juce::Rectangle<int> cell);
     void updateEnabledLook();
 
     juce::AudioProcessorValueTreeState& parameters;
@@ -86,12 +86,9 @@ private:
     PowerButton powerButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAttachment;
 
-    juce::TextButton positionButton;
-    juce::String positionOffText, positionOnText;
-    int positionWidth = 128;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> positionAttachment;
-
     std::vector<std::unique_ptr<Control>> controls;
+    std::unique_ptr<Control> mixControl;
+    int mixDividerX = -1;
 
     juce::Component* footer = nullptr;
     int footerBaseWidth = 0, footerBaseHeight = 0;

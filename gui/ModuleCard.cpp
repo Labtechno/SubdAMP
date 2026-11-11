@@ -39,8 +39,7 @@ namespace
 ModuleCard::ModuleCard (juce::AudioProcessorValueTreeState& parametersToUse,
                         const juce::String& cardTitle,
                         dsp::LatencyTier latencyTier,
-                        const char* enabledParameterId,
-                        const char* positionParameterId)
+                        const char* enabledParameterId)
     : parameters (parametersToUse),
       title (cardTitle),
       tier (latencyTier)
@@ -49,20 +48,6 @@ ModuleCard::ModuleCard (juce::AudioProcessorValueTreeState& parametersToUse,
     powerButton.onStateChange = [this] { updateEnabledLook(); };
     addAndMakeVisible (powerButton);
     powerAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (parameters, enabledParameterId, powerButton);
-
-    positionOffText = juce::String::fromUTF8 ("AVANT L'AMPLI");
-    positionOnText = juce::String::fromUTF8 ("APRÈS L'AMPLI");
-
-    if (positionParameterId != nullptr)
-    {
-        positionButton.setClickingTogglesState (true);
-        positionButton.setTooltip (juce::String::fromUTF8 ("Place le module avant ou après l'ampli"));
-        positionButton.setColour (juce::TextButton::buttonOnColourId, theme::panelRaised);
-        positionButton.onStateChange = [this] { updatePositionText(); };
-        addAndMakeVisible (positionButton);
-        positionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (parameters, positionParameterId, positionButton);
-        updatePositionText();
-    }
 }
 
 ModuleCard::~ModuleCard() = default;
@@ -81,23 +66,44 @@ ModuleCard::Control& ModuleCard::addControl (const juce::String& labelText, int 
     return *controls.back();
 }
 
-void ModuleCard::addKnob (const char* parameterId, const juce::String& labelText)
+std::unique_ptr<ModuleCard::Control> ModuleCard::makeKnob (const char* parameterId, const juce::String& labelText)
 {
-    auto& control = addControl (labelText, 100);
+    auto control = std::make_unique<Control>();
+    control->baseWidth = 100;
+    control->label.setText (labelText, juce::dontSendNotification);
+    control->label.setJustificationType (juce::Justification::centred);
+    control->label.setColour (juce::Label::textColourId, theme::textDim);
+    control->label.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (control->label);
 
-    control.slider = std::make_unique<juce::Slider>();
-    auto& slider = *control.slider;
+    control->slider = std::make_unique<juce::Slider>();
+    auto& slider = *control->slider;
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
     addAndMakeVisible (slider);
 
-    control.sliderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (parameters, parameterId, slider);
+    control->sliderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (parameters, parameterId, slider);
 
     // Double-clic : retour à la valeur par défaut du paramètre.
     if (auto* parameter = parameters.getParameter (parameterId))
         slider.setDoubleClickReturnValue (true, parameter->convertFrom0to1 (parameter->getDefaultValue()));
 
+    return control;
+}
+
+void ModuleCard::addKnob (const char* parameterId, const juce::String& labelText)
+{
+    controls.push_back (makeKnob (parameterId, labelText));
     updateEnabledLook();
+}
+
+void ModuleCard::setMixKnob (const char* parameterId)
+{
+    mixControl = makeKnob (parameterId, "MIX");
+    mixControl->label.setColour (juce::Label::textColourId, theme::accent);
+    mixControl->slider->setTooltip (juce::String::fromUTF8 ("Dosage entre le son qui arrive (sec) et le son traité. Double-clic : valeur par défaut"));
+    updateEnabledLook();
+    resized();
 }
 
 void ModuleCard::addChoice (const char* parameterId, const juce::String& labelText, int baseWidth)
@@ -142,20 +148,6 @@ void ModuleCard::setScale (float newScale)
     repaint();
 }
 
-void ModuleCard::setPositionLabels (const juce::String& whenOff, const juce::String& whenOn, int baseWidth)
-{
-    positionOffText = whenOff;
-    positionOnText = whenOn;
-    positionWidth = baseWidth;
-    updatePositionText();
-    resized();
-}
-
-void ModuleCard::updatePositionText()
-{
-    positionButton.setButtonText (positionButton.getToggleState() ? positionOnText : positionOffText);
-}
-
 void ModuleCard::addToggle (const char* parameterId, const juce::String& labelText, int baseWidth)
 {
     auto& control = addControl ({}, baseWidth);
@@ -176,6 +168,12 @@ void ModuleCard::updateEnabledLook()
 {
     // Module à l'arrêt : réglages grisés, mais toujours modifiables (on prépare un son avant de l'allumer).
     const auto alpha = powerButton.getToggleState() ? 1.0f : 0.45f;
+
+    if (mixControl != nullptr)
+    {
+        mixControl->label.setAlpha (alpha);
+        mixControl->slider->setAlpha (alpha);
+    }
 
     for (auto& control : controls)
     {
@@ -206,12 +204,9 @@ void ModuleCard::paint (juce::Graphics& g)
     g.setColour (isOn ? theme::panelOutline.brighter (0.15f) : theme::panelOutline);
     g.drawRoundedRectangle (bounds.reduced (0.5f), corner, 1.0f * scale);
 
-    // En-tête : interrupteur, titre, description ; badge et position à droite.
+    // En-tête : interrupteur, titre, description ; badge à droite.
     auto header = bounds.withHeight (headerHeight * scale).reduced (20.0f * scale, 0.0f);
     header.removeFromLeft (40.0f * scale); // interrupteur
-
-    if (positionButton.isVisible())
-        header.removeFromRight (static_cast<float> (positionWidth + 12) * scale);
 
     const auto badgeText = theme::labelFor (tier) + shownLatency;
     const auto badgeWidth = juce::GlyphArrangement::getStringWidth (juce::FontOptions (11.0f * scale, juce::Font::bold), badgeText)
@@ -231,6 +226,10 @@ void ModuleCard::paint (juce::Graphics& g)
 
     g.setColour (theme::panelOutline);
     g.drawHorizontalLine (juce::roundToInt (headerHeight * scale), bounds.getX() + 16.0f * scale, bounds.getRight() - 16.0f * scale);
+
+    // Séparation du MIX : il dose tout le module, pas un réglage parmi d'autres.
+    if (mixDividerX >= 0)
+        g.drawVerticalLine (mixDividerX, (headerHeight + 24.0f) * scale, bounds.getBottom() - 24.0f * scale);
 }
 
 void ModuleCard::resized()
@@ -242,14 +241,23 @@ void ModuleCard::resized()
 
     powerButton.setBounds (header.removeFromLeft (px (30.0f)).withSizeKeepingCentre (px (28.0f), px (28.0f)));
 
-    if (positionButton.isVisible())
-    {
-        const auto width = px (static_cast<float> (positionWidth));
-        positionButton.setBounds (header.removeFromRight (width).withSizeKeepingCentre (width, px (28.0f)));
-    }
-
     area.removeFromTop (px (12.0f));
     area.removeFromBottom (px (12.0f));
+
+    const auto rowHeight = px (static_cast<float> (controlHeight));
+    const auto rowY = area.getY() + juce::jmax (0, (area.getHeight() - rowHeight) / 2);
+
+    // MIX : tout à droite, séparé par un trait.
+    mixDividerX = -1;
+
+    if (mixControl != nullptr)
+    {
+        const auto width = px (static_cast<float> (mixControl->baseWidth));
+        layoutControl (*mixControl, juce::Rectangle<int> (area.getRight() - width, rowY, width, rowHeight));
+        area.removeFromRight (width + px (12.0f));
+        mixDividerX = area.getRight();
+        area.removeFromRight (px (12.0f));
+    }
 
     // Composant libre (fichier) : à droite des réglages, ou centré s'il n'y a pas de réglages.
     if (footer != nullptr)
@@ -259,7 +267,7 @@ void ModuleCard::resized()
 
         if (controls.empty())
         {
-            footer->setBounds (area.withSizeKeepingCentre (footerWidth, footerHeight));
+            footer->setBounds (area.withSizeKeepingCentre (juce::jmin (footerWidth, area.getWidth()), footerHeight));
             return;
         }
 
@@ -267,38 +275,44 @@ void ModuleCard::resized()
         area.removeFromRight (px (24.0f));
     }
 
-    // Réglages sur une ligne, centrés.
-    int totalWidth = 0;
+    // Réglages sur une ligne, centrés ; resserrés s'ils sont trop nombreux pour la largeur.
+    float totalWidth = 0.0f;
 
     for (auto& control : controls)
-        totalWidth += px (static_cast<float> (control->baseWidth));
+        totalWidth += static_cast<float> (control->baseWidth) * scale;
 
-    auto x = area.getX() + juce::jmax (0, (area.getWidth() - totalWidth) / 2);
-    const auto rowHeight = px (static_cast<float> (controlHeight));
-    const auto y = area.getY() + juce::jmax (0, (area.getHeight() - rowHeight) / 2);
+    const auto squeeze = totalWidth > 0.0f ? juce::jmin (1.0f, static_cast<float> (area.getWidth()) / totalWidth) : 1.0f;
+    auto x = static_cast<float> (area.getX()) + juce::jmax (0.0f, (static_cast<float> (area.getWidth()) - totalWidth * squeeze) * 0.5f);
 
     for (auto& control : controls)
     {
-        auto cell = juce::Rectangle<int> (x, y, px (static_cast<float> (control->baseWidth)), rowHeight).reduced (px (6.0f), 0);
-        x += px (static_cast<float> (control->baseWidth));
+        const auto width = static_cast<float> (control->baseWidth) * scale * squeeze;
+        layoutControl (*control, juce::Rectangle<float> (x, static_cast<float> (rowY), width, static_cast<float> (rowHeight)).toNearestInt());
+        x += width;
+    }
+}
 
-        control->label.setFont (juce::FontOptions (12.0f * scale, juce::Font::bold));
-        control->label.setBounds (cell.removeFromTop (px (static_cast<float> (labelHeight))));
+void ModuleCard::layoutControl (Control& control, juce::Rectangle<int> cell)
+{
+    const auto px = [this] (float value) { return juce::roundToInt (value * scale); };
+    cell = cell.reduced (px (6.0f), 0);
 
-        if (control->slider != nullptr)
-        {
-            control->slider->setTextBoxStyle (juce::Slider::TextBoxBelow, false, cell.getWidth(), px (20.0f));
-            control->slider->setBounds (cell.withTrimmedTop (px (4.0f)));
-        }
-        else if (control->combo != nullptr)
-        {
-            control->combo->setBounds (cell.withSizeKeepingCentre (cell.getWidth(), px (static_cast<float> (comboHeight)))
-                                           .translated (0, -px (10.0f)));
-        }
-        else if (control->toggle != nullptr)
-        {
-            control->toggle->setBounds (cell.withSizeKeepingCentre (cell.getWidth(), px (64.0f)).translated (0, -px (10.0f)));
-        }
+    control.label.setFont (juce::FontOptions (12.0f * scale, juce::Font::bold));
+    control.label.setBounds (cell.removeFromTop (px (static_cast<float> (labelHeight))));
+
+    if (control.slider != nullptr)
+    {
+        control.slider->setTextBoxStyle (juce::Slider::TextBoxBelow, false, cell.getWidth(), px (20.0f));
+        control.slider->setBounds (cell.withTrimmedTop (px (4.0f)));
+    }
+    else if (control.combo != nullptr)
+    {
+        control.combo->setBounds (cell.withSizeKeepingCentre (cell.getWidth(), px (static_cast<float> (comboHeight)))
+                                      .translated (0, -px (10.0f)));
+    }
+    else if (control.toggle != nullptr)
+    {
+        control.toggle->setBounds (cell.withSizeKeepingCentre (cell.getWidth(), px (64.0f)).translated (0, -px (10.0f)));
     }
 }
 

@@ -3,10 +3,11 @@
 #include "subdamp/dsp/FrequencyShifter.h"
 #include "subdamp/dsp/NoiseGate.h"
 #include "subdamp/dsp/OctaveDivider.h"
-#include "subdamp/dsp/SwitchableEffect.h"
+#include "subdamp/dsp/ChainSlot.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 using namespace subdamp::dsp;
 using namespace subdamp::test;
@@ -177,27 +178,9 @@ TEST_CASE ("FREQ SHIFT : la réinjection reste stable", "[freqshift]")
 }
 
 //==============================================================================
-TEST_CASE ("SwitchableEffect : à l'arrêt, le module n'est pas calculé et le signal est intact", "[switch]")
-{
-    FrequencyShifter shifter;
-    SwitchableEffect slot (shifter);
-    slot.prepare ({ sr, blockSize });
-    slot.setEnabled (false);
-    slot.reset();
-    shifter.setShiftHz (500.0f);
-    shifter.setMix (1.0f);
-
-    auto signal = sine (1000.0, sr, 4096);
-    const auto original = signal;
-    processInBlocks (slot, signal, blockSize);
-
-    REQUIRE (slot.isFullyOff());
-    REQUIRE (signal == original);
-}
-
 namespace
 {
-    /** Module de test : inverse la polarité, pour voir clairement le fondu. */
+    /** Module de test : inverse la polarité, pour voir clairement le fondu et le mélange. */
     struct Inverter final : MonoEffect
     {
         void prepare (const ProcessSpec&) override {}
@@ -205,25 +188,132 @@ namespace
         void process (std::span<float> block) noexcept override { for (auto& s : block) s = -s; }
         LatencyTier latencyTier() const noexcept override { return LatencyTier::live; }
     };
+
+    /** Module de test : retarde le signal d'un nombre fixe d'échantillons. */
+    struct Delay final : MonoEffect
+    {
+        explicit Delay (std::size_t samples) : line (samples, 0.0f) {}
+        void prepare (const ProcessSpec&) override {}
+        void reset() noexcept override { std::fill (line.begin(), line.end(), 0.0f); position = 0; }
+        void process (std::span<float> block) noexcept override
+        {
+            for (auto& s : block)
+            {
+                std::swap (s, line[position]);
+                position = (position + 1) % line.size();
+            }
+        }
+        LatencyTier latencyTier() const noexcept override { return LatencyTier::live; }
+
+        std::vector<float> line;
+        std::size_t position = 0;
+    };
+
+    /** Traite un signal stéréo dans un emplacement, par blocs. */
+    void processInBlocks (ChainSlot& slot, std::vector<float>& left, std::vector<float>& right, int size)
+    {
+        for (std::size_t start = 0; start < left.size(); start += static_cast<std::size_t> (size))
+        {
+            const auto n = std::min<std::size_t> (static_cast<std::size_t> (size), left.size() - start);
+            slot.process (std::span<float> { left.data() + start, n }, std::span<float> { right.data() + start, n });
+        }
+    }
 }
 
-TEST_CASE ("SwitchableEffect : la mise en marche se fait en fondu de 10 ms", "[switch]")
+TEST_CASE ("ChainSlot : à l'arrêt, le module n'est pas calculé et le signal est intact", "[slot]")
 {
-    Inverter inverter;
-    SwitchableEffect slot (inverter);
+    FrequencyShifter shifter;
+    ChainSlot slot (shifter);
     slot.prepare ({ sr, blockSize });
     slot.setEnabled (false);
     slot.reset();
+    shifter.setShiftHz (500.0f);
+    shifter.setMix (1.0f);
 
-    std::vector<float> signal (2048, 0.5f);
+    auto left = sine (1000.0, sr, 4096);
+    auto right = sine (700.0, sr, 4096);
+    const auto originalLeft = left, originalRight = right;
+    processInBlocks (slot, left, right, blockSize);
+
+    REQUIRE (slot.isIdle());
+    REQUIRE (left == originalLeft);
+    REQUIRE (right == originalRight);
+}
+
+TEST_CASE ("ChainSlot : la mise en marche se fait en fondu de 15 ms, sans saut", "[slot]")
+{
+    Inverter inverter;
+    ChainSlot slot (inverter);
+    slot.prepare ({ sr, blockSize });
+    slot.setMix (1.0f);
+    slot.setEnabled (false);
+    slot.reset();
+
+    std::vector<float> left (2048, 0.5f), right (2048, 0.5f);
     slot.setEnabled (true);
-    processInBlocks (slot, signal, blockSize);
+    processInBlocks (slot, left, right, blockSize);
 
-    // Fondu linéaire de +0,5 (sec) à -0,5 (traité) en 480 échantillons, sans saut.
-    for (std::size_t i = 1; i < 480; ++i)
-        REQUIRE (signal[i] < signal[i - 1]);
+    // Fondu linéaire de +0,5 (sec) à -0,5 (traité) en 720 échantillons.
+    for (std::size_t i = 1; i < 720; ++i)
+        REQUIRE (left[i] < left[i - 1]);
 
-    REQUIRE (signal[239] == Catch::Approx (0.0f).margin (0.01f));
-    REQUIRE (signal[479] == -0.5f);
-    REQUIRE (signal.back() == -0.5f);
+    REQUIRE (left[359] == Catch::Approx (0.0f).margin (0.01f));
+    REQUIRE (left.back() == Catch::Approx (-0.5f));
+    REQUIRE (right == left);
+}
+
+TEST_CASE ("ChainSlot : sortie = sec × (1 − MIX) + traité × MIX", "[slot]")
+{
+    const auto mixValue = GENERATE (0.0f, 0.25f, 0.5f, 1.0f);
+
+    Inverter inverter;
+    ChainSlot slot (inverter);
+    slot.prepare ({ sr, blockSize });
+    slot.setMix (mixValue);
+    slot.setEnabled (true);
+    slot.reset();
+
+    std::vector<float> left (1024, 0.5f), right (1024, 0.5f);
+    processInBlocks (slot, left, right, blockSize);
+
+    // Traité = -0,5 : sortie = 0,5 (1 − m) − 0,5 m = 0,5 − m.
+    REQUIRE (left.back() == Catch::Approx (0.5f - mixValue).margin (1.0e-6f));
+}
+
+TEST_CASE ("ChainSlot : un module mono après une texture garde la stéréo de la partie sèche", "[slot]")
+{
+    Inverter inverter;
+    ChainSlot slot (inverter);
+    slot.prepare ({ sr, blockSize });
+    slot.setMix (0.5f);
+    slot.setEnabled (true);
+    slot.reset();
+
+    // Gauche et droite différentes : le module traite la somme mono (0,3), le sec reste séparé.
+    std::vector<float> left (512, 0.5f), right (512, 0.1f);
+    processInBlocks (slot, left, right, blockSize);
+
+    REQUIRE (left.back() == Catch::Approx (0.25f - 0.15f));
+    REQUIRE (right.back() == Catch::Approx (0.05f - 0.15f));
+}
+
+TEST_CASE ("ChainSlot : le sec retardé du retard du module ne filtre pas en peigne", "[slot]")
+{
+    constexpr int latency = 37;
+    Delay delay (latency);
+    ChainSlot slot (delay);
+    slot.prepare ({ sr, blockSize });
+    slot.setMix (0.5f);
+    slot.setDryDelaySamples (latency);
+    slot.setEnabled (true);
+    slot.reset();
+
+    // Mélange 50 / 50 d'un signal et de sa copie retardée : sans compensation, creux en peigne
+    // (annulation à 648 Hz pour 37 échantillons) ; avec, le niveau reste celui du signal.
+    auto left = sine (sr / (2.0 * latency), sr, 8192);
+    auto right = left;
+    const auto inputLevel = rms (std::span<const float> { left }.subspan (4096));
+    processInBlocks (slot, left, right, blockSize);
+
+    REQUIRE (rms (std::span<const float> { left }.subspan (4096)) == Catch::Approx (inputLevel).epsilon (0.01));
 }

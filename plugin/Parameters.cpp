@@ -41,6 +41,12 @@ namespace
         return makeFloat (parameterId, version, name, { 0.0f, maxPercent, 1.0f }, defaultPercent, "%", formatPercent);
     }
 
+    /** Potard MIX d'un module : sortie = sec × (1 − MIX) + traité × MIX. */
+    std::unique_ptr<juce::AudioParameterFloat> makeMix (const char* parameterId, const juce::String& moduleName, float defaultPercent)
+    {
+        return makePercent (parameterId, moduleName + " mix", defaultPercent, 100.0f, addedInVersion5);
+    }
+
     /** Demi-tons : « +1 oct » pour les octaves justes, sinon « +7 dt » (une décimale si besoin). */
     juce::String formatSemitones (float value, int)
     {
@@ -65,12 +71,6 @@ namespace
                                                             int version = addedInVersion3)
     {
         return std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { parameterId, version }, name, choices, defaultIndex);
-    }
-
-    std::unique_ptr<juce::AudioParameterChoice> makeSource (const char* parameterId, const juce::String& name)
-    {
-        return makeChoice (parameterId, name, { utf8 ("Avant l'ampli"), utf8 ("Fin de chaîne") },
-                           static_cast<int> (TextureSource::endOfChain), addedInVersion4);
     }
 
     juce::String formatSeconds (float value, int)
@@ -173,15 +173,6 @@ namespace
         return std::make_unique<juce::AudioParameterBool> (juce::ParameterID { parameterId, version }, name, defaultValue);
     }
 
-    std::unique_ptr<juce::AudioParameterChoice> makePosition (const char* parameterId, const juce::String& name,
-                                                              Position defaultPosition, int version = addedInVersion2)
-    {
-        return std::make_unique<juce::AudioParameterChoice> (
-            juce::ParameterID { parameterId, version }, name,
-            juce::StringArray { utf8 ("Avant l'ampli"), utf8 ("Après l'ampli") },
-            static_cast<int> (defaultPosition));
-    }
-
     template <typename... Parameters>
     std::unique_ptr<juce::AudioProcessorParameterGroup> group (const char* groupId, const juce::String& name, Parameters... parameters)
     {
@@ -201,21 +192,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         makeSwitch (id::gateEnabled, addedInVersion2, "Gate", true),
         makeDecibels (id::gateThreshold, addedInVersion2, "Gate seuil", -90.0f, -20.0f, -65.0f),
         makeFloat (id::gateRelease, addedInVersion2, utf8 ("Gate relâchement"),
-                   { 10.0f, 500.0f, 1.0f, 0.5f }, 80.0f, "ms", formatMilliseconds)));
+                   { 10.0f, 500.0f, 1.0f, 0.5f }, 80.0f, "ms", formatMilliseconds),
+        makeMix (id::gateMix, "Gate", 100.0f)));
 
+    // SUB, HARMONIZER : MIX 100 % = les voix seules, sans le son direct.
     layout.add (group ("sub", "SUB",
         makeSwitch (id::subEnabled, addedInVersion2, "SUB", false),
-        makePosition (id::subPosition, "SUB position", Position::beforeAmp),
-        makePercent (id::subDry, "SUB direct", 100.0f),
         makePercent (id::subDown1, "SUB -1 octave", 70.0f),
         makePercent (id::subDown2, "SUB -2 octaves", 0.0f),
         makePercent (id::subUp, "SUB +1 octave", 0.0f),
         makeFloat (id::subTone, addedInVersion2, utf8 ("SUB tonalité"),
-                   { 100.0f, 4000.0f, 1.0f, 0.3f }, 800.0f, "Hz", formatHertz)));
+                   { 100.0f, 4000.0f, 1.0f, 0.3f }, 800.0f, "Hz", formatHertz),
+        makeMix (id::subMix, "SUB", 50.0f)));
 
     layout.add (group ("whammy", "WHAMMY",
         makeSwitch (id::whEnabled, addedInVersion3, "WHAMMY", false),
-        makePosition (id::whPosition, "WHAMMY position", Position::beforeAmp, addedInVersion3),
         makeFloat (id::whInterval, addedInVersion3, "WHAMMY intervalle",
                    { -24.0f, 24.0f, 0.01f }, -12.0f, "dt", formatSemitones),
         makeChoice (id::whMode, "WHAMMY mode",
@@ -227,7 +218,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
 
     layout.add (group ("harmonizer", "HARMONIZER",
         makeSwitch (id::hmEnabled, addedInVersion3, "HARMONIZER", false),
-        makePosition (id::hmPosition, "HARMONIZER position", Position::afterAmp, addedInVersion3),
         makeChoice (id::hmKey, utf8 ("HARMONIZER tonalité"),
                     { "C", utf8 ("C♯ / D♭"), "D", utf8 ("D♯ / E♭"), "E", "F", utf8 ("F♯ / G♭"), "G",
                       utf8 ("G♯ / A♭"), "A", utf8 ("A♯ / B♭"), "B" }, 4),
@@ -240,7 +230,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         makePercent (id::hmLevel2, "HARMONIZER niveau 2", 80.0f, 100.0f, addedInVersion3),
         makeFloat (id::hmFormant, addedInVersion3, "HARMONIZER formants",
                    { -12.0f, 12.0f, 0.1f }, 0.0f, "dt", formatSemitones),
-        makePercent (id::hmDirect, "HARMONIZER direct", 100.0f, 100.0f, addedInVersion3)));
+        makeMix (id::hmMix, "HARMONIZER", 50.0f)));
 
     layout.add (group ("amp", "Ampli",
         makeSwitch (id::ampEnabled, addedInVersion2, "Ampli", true),
@@ -248,25 +238,25 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         makeDecibels (id::ampBass, addedInVersion2, "Ampli graves", -12.0f, 12.0f, 0.0f),
         makeDecibels (id::ampMid, addedInVersion2, utf8 ("Ampli médiums"), -12.0f, 12.0f, 0.0f),
         makeDecibels (id::ampTreble, addedInVersion2, "Ampli aigus", -12.0f, 12.0f, 0.0f),
-        makeDecibels (id::ampLevel, addedInVersion2, "Ampli niveau", -24.0f, 24.0f, 0.0f)));
+        makeDecibels (id::ampLevel, addedInVersion2, "Ampli niveau", -24.0f, 24.0f, 0.0f),
+        makeMix (id::ampMix, "Ampli", 100.0f)));
 
     layout.add (group ("cab", "Cab",
-        makeSwitch (id::cabEnabled, addedInVersion2, "Cab", true)));
+        makeSwitch (id::cabEnabled, addedInVersion2, "Cab", true),
+        makeMix (id::cabMix, "Cab", 100.0f)));
 
     layout.add (group ("shimmer", "SHIMMER",
         makeSwitch (id::shEnabled, addedInVersion4, "SHIMMER", false),
-        makeSource (id::shSource, "SHIMMER source"),
         makeChoice (id::shInterval, "SHIMMER intervalle", labelsOf (shimmerChoices), 0, addedInVersion4),
         makeFloat (id::shDecay, addedInVersion4, utf8 ("SHIMMER durée"),
                    { 0.5f, 30.0f, 0.1f, 0.4f }, 6.0f, "s", formatSeconds),
         makePercent (id::shAmount, "SHIMMER shimmer", 50.0f, 100.0f, addedInVersion4),
         makeFloat (id::shTone, addedInVersion4, utf8 ("SHIMMER tonalité"),
                    { 500.0f, 16000.0f, 1.0f, 0.3f }, 6000.0f, "Hz", formatHertz),
-        makePercent (id::shLevel, "SHIMMER niveau", 40.0f, 100.0f, addedInVersion4)));
+        makeMix (id::shMix, "SHIMMER", 30.0f)));
 
     layout.add (group ("poly", "POLY",
         makeSwitch (id::poEnabled, addedInVersion4, "POLY", false),
-        makeSource (id::poSource, "POLY source"),
         makeFloat (id::poInterval1, addedInVersion4, "POLY intervalle 1",
                    { -24.0f, 24.0f, 0.01f }, 12.0f, "dt", formatSemitones),
         makePercent (id::poLevel1, "POLY niveau 1", 60.0f, 100.0f, addedInVersion4),
@@ -275,11 +265,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         makePercent (id::poLevel2, "POLY niveau 2", 0.0f, 100.0f, addedInVersion4),
         makeFloat (id::poFormant, addedInVersion4, "POLY formants",
                    { -12.0f, 12.0f, 0.1f }, 0.0f, "dt", formatSemitones),
-        makePercent (id::poWidth, "POLY largeur", 60.0f, 100.0f, addedInVersion4)));
+        makePercent (id::poWidth, "POLY largeur", 60.0f, 100.0f, addedInVersion4),
+        makeMix (id::poMix, "POLY", 50.0f)));
 
     layout.add (group ("freeze", "FREEZE",
         makeSwitch (id::frEnabled, addedInVersion4, "FREEZE", false),
-        makeSource (id::frSource, "FREEZE source"),
         makeSwitch (id::frHold, addedInVersion4, "FREEZE figer", false),
         makeFloat (id::frAttack, addedInVersion4, "FREEZE attaque",
                    { 10.0f, 5000.0f, 1.0f, 0.3f }, 300.0f, "ms", formatMilliseconds),
@@ -287,11 +277,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
                    { 10.0f, 10000.0f, 1.0f, 0.3f }, 2000.0f, "ms", formatMilliseconds),
         makeFloat (id::frTone, addedInVersion4, utf8 ("FREEZE tonalité"),
                    { 500.0f, 16000.0f, 1.0f, 0.3f }, 8000.0f, "Hz", formatHertz),
-        makePercent (id::frLevel, "FREEZE niveau", 60.0f, 100.0f, addedInVersion4)));
+        // FREEZE : la nappe s'ajoute au jeu, qui n'est jamais atténué. MIX = niveau de la nappe.
+        makeMix (id::frMix, "FREEZE", 60.0f)));
 
     layout.add (group ("granular", "GRANULAR",
         makeSwitch (id::grEnabled, addedInVersion4, "GRANULAR", false),
-        makeSource (id::grSource, "GRANULAR source"),
         makeChoice (id::grMode, "GRANULAR mode", { "Nuage", "Stutter" }, 0, addedInVersion4),
         makeFloat (id::grSize, addedInVersion4, "GRANULAR taille",
                    { 10.0f, 1000.0f, 1.0f, 0.4f }, 120.0f, "ms", formatMilliseconds),
@@ -304,13 +294,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
         makeChoice (id::grDivision, "GRANULAR division", labelsOf (divisionChoices), 2, addedInVersion4),
         std::make_unique<juce::AudioParameterInt> (juce::ParameterID { id::grRepeats, addedInVersion4 },
                                                    utf8 ("GRANULAR répétitions"), 1, 8, 4),
-        makePercent (id::grLevel, "GRANULAR niveau", 50.0f, 100.0f, addedInVersion4),
+        makeMix (id::grMix, "GRANULAR", 35.0f),
         makeFloat (id::tempo, addedInVersion4, "Tempo (standalone)",
                    { 40.0f, 240.0f, 1.0f }, 120.0f, "BPM", formatBpm)));
 
     layout.add (group ("fs", "FREQ SHIFT",
         makeSwitch (id::fsEnabled, addedInVersion2, "FREQ SHIFT", false),
-        makePosition (id::fsPosition, "FREQ SHIFT position", Position::afterAmp),
         makeFloat (id::fsShift, addedInVersion2, utf8 ("FREQ SHIFT décalage"),
                    { -2000.0f, 2000.0f, 0.1f, 0.35f, true }, 120.0f, "Hz", formatHertz),
         makePercent (id::fsMix, "FREQ SHIFT mix", 50.0f),

@@ -2,6 +2,8 @@
 
 #include "subdamp/dsp/Interpolation.h"
 
+#include <signalsmith-stretch/signalsmith-stretch.h>
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -25,6 +27,32 @@ namespace
     constexpr float injection = 0.5f;
     constexpr float outputGain = 0.3f;
 
+    // Les aigus (au-dessus de TONE) décroissent deux fois plus vite que les graves.
+    constexpr double highDecayRatio = 0.5;
+
+    // Gain d'énergie de la réverbe, de l'entrée à la somme mono, pour une ligne moyenne :
+    //   Γ ≈ outputGain² · 4/8 · 2 · (injection · inputScale)² · 8 / (1 − g²) ≈ 0,09 · s² / (1 − g²)
+    // La normalisation inputScale le rend à peu près constant pour les graves : 0,09 / 0,292.
+    // Au maximum, chaque génération transposée garde 80 % de l'énergie de la précédente.
+    constexpr float maxEnergyPerGeneration = 0.8f;
+    constexpr float reverbEnergyGain = 0.09f / 0.292f;
+    const float loopGain = std::sqrt (maxEnergyPerGeneration / reverbEnergyGain);
+
+    constexpr double inputHighPassHz = 50.0;
+    constexpr double loopHighPassHz = 150.0;
+
+    /** Transparent jusqu'à 0,7, puis arrondi vers 1 : n'agit que sur les crêtes extrêmes. */
+    float softLimit (float x) noexcept
+    {
+        constexpr float knee = 0.7f;
+        const auto magnitude = std::abs (x);
+
+        if (magnitude <= knee)
+            return x;
+
+        return std::copysign (knee + (1.0f - knee) * std::tanh ((magnitude - knee) / (1.0f - knee)), x);
+    }
+
     /** Transformée de Walsh-Hadamard rapide, normalisée (matrice orthogonale). */
     void hadamard8 (std::array<float, 8>& x) noexcept
     {
@@ -45,6 +73,15 @@ namespace
     }
 }
 
+struct ShimmerReverb::LoopShifter
+{
+    signalsmith::stretch::SignalsmithStretch<float> stretch { 4321 }; // graine fixe : rendu reproductible
+    float appliedSemitones = 1000.0f;
+};
+
+ShimmerReverb::ShimmerReverb() : loopShifter (std::make_unique<LoopShifter>()) {}
+ShimmerReverb::~ShimmerReverb() = default;
+
 void ShimmerReverb::prepare (const ProcessSpec& spec)
 {
     sampleRate = spec.sampleRate;
@@ -61,9 +98,13 @@ void ShimmerReverb::prepare (const ProcessSpec& spec)
     for (std::size_t i = 0; i < diffusers.size(); ++i)
         diffusers[i].buffer.assign (static_cast<std::size_t> (std::round (diffuserMs[i] * 0.001 * sampleRate)), 0.0f);
 
-    // Fenêtre plus longue que celle du WHAMMY : la nappe est plus douce, la latence n'importe pas ici.
-    shifter.prepare (sampleRate, 0.05);
+    loopShifter->stretch.presetDefault (1, static_cast<float> (sampleRate), true);
+    loopShifter->appliedSemitones = 1000.0f; // force la configuration au premier tour
     shimmer.prepare (sampleRate, 0.05);
+
+    inputHighPass.setCoefficients (BiquadCoefficients::highPass (sampleRate, inputHighPassHz, butterworthQ));
+    loopHighPass[0].setCoefficients (BiquadCoefficients::highPass (sampleRate, loopHighPassHz, butterworth4Q1));
+    loopHighPass[1].setCoefficients (BiquadCoefficients::highPass (sampleRate, loopHighPassHz, butterworth4Q2));
 
     // Modulation lente des longueurs (0,4 Hz)
     const auto step = 2.0 * std::numbers::pi * 0.4 / sampleRate;
@@ -71,7 +112,9 @@ void ShimmerReverb::prepare (const ProcessSpec& spec)
     stepSin = std::sin (step);
 
     updateDecayGains();
-    setToneHz (6000.0f);
+    const auto tone = toneHz > 0.0f ? toneHz : 6000.0f;
+    toneHz = -1.0f; // recalcule les coefficients pour la nouvelle fréquence d'échantillonnage
+    setToneHz (tone);
     reset();
 }
 
@@ -80,7 +123,7 @@ void ShimmerReverb::reset() noexcept
     for (auto& line : lines)
     {
         std::fill (line.buffer.begin(), line.buffer.end(), 0.0f);
-        line.damped = 0.0f;
+        line.lowBand = 0.0f;
     }
 
     for (auto& diffuser : diffusers)
@@ -90,8 +133,18 @@ void ShimmerReverb::reset() noexcept
     }
 
     written = 0;
-    shifter.reset();
-    lastShifted = 0.0f;
+    inputHighPass.reset();
+    inputLowPass.reset();
+
+    loopShifter->stretch.reset();
+    loopRunning = false;
+    loopInput.fill (0.0f);
+    loopOutput.fill (0.0f);
+    loopPosition = 0;
+
+    for (auto& filter : loopHighPass)
+        filter.reset();
+
     shimmer.setCurrentAndTarget (shimmer.getTarget());
     modulationCos = 1.0;
     modulationSin = 0.0;
@@ -111,11 +164,14 @@ void ShimmerReverb::setDecaySeconds (float seconds) noexcept
 void ShimmerReverb::updateDecayGains() noexcept
 {
     // Gain par passage pour perdre 60 dB en decaySeconds : 10^(-3 · longueur / (T60 · fe)).
+    // Les aigus ont leur propre gain, pour un T60 plus court (amortissement à deux bandes).
     double sumOfSquares = 0.0;
+    const auto highDecaySeconds = std::max (0.25, decaySeconds * highDecayRatio);
 
     for (auto& line : lines)
     {
         line.decayGain = static_cast<float> (std::pow (10.0, -3.0 * line.length / (decaySeconds * sampleRate)));
+        line.highGain = static_cast<float> (std::pow (10.0, -3.0 * line.length / (highDecaySeconds * sampleRate)));
         sumOfSquares += static_cast<double> (line.decayGain) * line.decayGain;
     }
 
@@ -127,15 +183,68 @@ void ShimmerReverb::updateDecayGains() noexcept
     inputScale = static_cast<float> (std::min (1.0, std::sqrt ((1.0 - meanSquare) / reference)));
 }
 
+void ShimmerReverb::setShimmer (float amount) noexcept
+{
+    shimmer.setTarget (std::clamp (amount, 0.0f, 1.0f));
+}
+
 void ShimmerReverb::setInterval (float semitones) noexcept
 {
-    shifterRatio = semitonesToRatio (semitones);
+    intervalSemitones = std::clamp (semitones, -24.0f, 24.0f);
 }
 
 void ShimmerReverb::setToneHz (float hz) noexcept
 {
+    if (hz == toneHz)
+        return;
+
+    toneHz = hz;
     const auto cutoff = std::clamp (static_cast<double> (hz), 200.0, 0.45 * sampleRate);
     dampingCoefficient = static_cast<float> (1.0 - std::exp (-2.0 * std::numbers::pi * cutoff / sampleRate));
+    inputLowPass.setCoefficients (BiquadCoefficients::lowPass (sampleRate, cutoff, butterworthQ));
+}
+
+int ShimmerReverb::loopDelaySamples() const noexcept
+{
+    const auto& stretch = loopShifter->stretch;
+    return stretch.inputLatency() + stretch.outputLatency() + static_cast<int> (loopBlock);
+}
+
+void ShimmerReverb::runLoop() noexcept
+{
+    auto& engine = *loopShifter;
+
+    // Boucle coupée et vide : pas de calcul. Elle repartira d'un état propre.
+    if (shimmer.getTarget() <= 0.0f && ! shimmer.isSmoothing() && shimmer.getCurrent() <= 0.0f)
+    {
+        if (loopRunning)
+        {
+            engine.stretch.reset();
+
+            for (auto& filter : loopHighPass)
+                filter.reset();
+
+            loopOutput.fill (0.0f);
+            loopRunning = false;
+        }
+
+        return;
+    }
+
+    loopRunning = true;
+
+    if (intervalSemitones != engine.appliedSemitones)
+    {
+        engine.stretch.setTransposeSemitones (intervalSemitones);
+        engine.appliedSemitones = intervalSemitones;
+    }
+
+    const std::array<const float*, 1> inputs { loopInput.data() };
+    const std::array<float*, 1> outputs { loopOutput.data() };
+    engine.stretch.process (inputs, static_cast<int> (loopBlock), outputs, static_cast<int> (loopBlock));
+
+    for (auto& sample : loopOutput)
+        sample = softLimit (loopHighPass[1].processSample (loopHighPass[0].processSample (sample)));
 }
 
 void ShimmerReverb::process (std::span<const float> input, std::span<float> left, std::span<float> right) noexcept
@@ -144,8 +253,10 @@ void ShimmerReverb::process (std::span<const float> input, std::span<float> left
 
     for (std::size_t n = 0; n < input.size(); ++n)
     {
-        // 1. Entrée + boucle transposée (saturée en douceur : la boucle reste bornée)
-        auto x = input[n] + shimmer.getNext() * std::tanh (lastShifted);
+        // 1. Entrée + génération précédente transposée, bornées par les passe-haut et passe-bas.
+        //    Le passe-bas TONE est dans la boucle : chaque génération plus aiguë est plus atténuée.
+        const auto feedback = shimmer.getNext() * loopGain * loopOutput[loopPosition];
+        auto x = inputLowPass.processSample (inputHighPass.processSample (input[n] + feedback));
 
         // 2. Diffusion de l'attaque (passe-tout de Schroeder)
         for (auto& diffuser : diffusers)
@@ -175,9 +286,10 @@ void ShimmerReverb::process (std::span<const float> input, std::span<float> left
             const auto delay = line.length + modulationDepth * modulation[i % 4];
             outputs[i] = readHermite (line.buffer.data(), line.mask, newest + 1.0 - delay);
 
-            // Amortissement : les aigus s'éteignent plus vite, comme dans une vraie pièce.
-            line.damped += dampingCoefficient * (outputs[i] - line.damped);
-            mixed[i] = line.damped * line.decayGain;
+            // Amortissement à deux bandes (Jot) : sous TONE, décroissance réglée ; au-dessus,
+            // deux fois plus rapide. Le gain ne dépasse jamais celui des graves : stable.
+            line.lowBand += dampingCoefficient * (outputs[i] - line.lowBand);
+            mixed[i] = line.highGain * outputs[i] + (line.decayGain - line.highGain) * line.lowBand;
         }
 
         // 4. Mélange orthogonal, puis réécriture avec l'entrée diffusée
@@ -188,7 +300,7 @@ void ShimmerReverb::process (std::span<const float> input, std::span<float> left
 
         ++written;
 
-        // 5. Sorties stéréo et boucle de transposition
+        // 5. Sorties stéréo
         float outLeft = 0.0f, outRight = 0.0f;
 
         for (std::size_t i = 0; i < lines.size(); ++i)
@@ -200,10 +312,17 @@ void ShimmerReverb::process (std::span<const float> input, std::span<float> left
         outLeft *= outputGain;
         outRight *= outputGain;
 
-        lastShifted = shifter.process (0.5f * (outLeft + outRight), shifterRatio);
-
         left[n] = outLeft;
         right[n] = outRight;
+
+        // 6. Boucle de transposition : la sortie part au transpositeur par blocs de 32
+        loopInput[loopPosition] = 0.5f * (outLeft + outRight);
+
+        if (++loopPosition == loopBlock)
+        {
+            loopPosition = 0;
+            runLoop();
+        }
     }
 
     // Renormalisation de l'oscillateur de modulation (dérive lente de la récurrence)

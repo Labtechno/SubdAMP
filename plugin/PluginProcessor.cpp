@@ -43,11 +43,6 @@ namespace
         return value.load (std::memory_order_relaxed);
     }
 
-    params::Position positionOf (const std::atomic<float>& value) noexcept
-    {
-        return load (value) > 0.5f ? params::Position::afterAmp : params::Position::beforeAmp;
-    }
-
     /** Seul le thread audio écrit ; l'interface lit puis remet à zéro. */
     void publishPeak (std::atomic<float>& meter, float peak) noexcept
     {
@@ -91,70 +86,45 @@ SubdAmpProcessor::SubdAmpProcessor()
       raw {
           rawParameter (parameters, params::id::inputGain),
           rawParameter (parameters, params::id::outputGain),
-          rawParameter (parameters, params::id::gateEnabled),
           rawParameter (parameters, params::id::gateThreshold),
           rawParameter (parameters, params::id::gateRelease),
-          rawParameter (parameters, params::id::ampEnabled),
           rawParameter (parameters, params::id::ampGain),
           rawParameter (parameters, params::id::ampBass),
           rawParameter (parameters, params::id::ampMid),
           rawParameter (parameters, params::id::ampTreble),
           rawParameter (parameters, params::id::ampLevel),
-          rawParameter (parameters, params::id::cabEnabled),
-          rawParameter (parameters, params::id::subEnabled),
-          rawParameter (parameters, params::id::subPosition),
-          rawParameter (parameters, params::id::subDry),
           rawParameter (parameters, params::id::subDown1),
           rawParameter (parameters, params::id::subDown2),
           rawParameter (parameters, params::id::subUp),
           rawParameter (parameters, params::id::subTone),
-          rawParameter (parameters, params::id::fsEnabled),
-          rawParameter (parameters, params::id::fsPosition),
           rawParameter (parameters, params::id::fsShift),
-          rawParameter (parameters, params::id::fsMix),
           rawParameter (parameters, params::id::fsFeedback),
-          rawParameter (parameters, params::id::whEnabled),
-          rawParameter (parameters, params::id::whPosition),
           rawParameter (parameters, params::id::whInterval),
           rawParameter (parameters, params::id::whMode),
           rawParameter (parameters, params::id::whGlide),
           rawParameter (parameters, params::id::whSensitivity),
-          rawParameter (parameters, params::id::whMix),
-          rawParameter (parameters, params::id::hmEnabled),
-          rawParameter (parameters, params::id::hmPosition),
           rawParameter (parameters, params::id::hmKey),
           rawParameter (parameters, params::id::hmScale),
           rawParameter (parameters, params::id::hmVoice1),
           rawParameter (parameters, params::id::hmLevel1),
           rawParameter (parameters, params::id::hmVoice2),
           rawParameter (parameters, params::id::hmLevel2),
-          rawParameter (parameters, params::id::hmFormant),
-          rawParameter (parameters, params::id::hmDirect) },
+          rawParameter (parameters, params::id::hmFormant) },
       textureRaw {
-          rawParameter (parameters, params::id::shEnabled),
-          rawParameter (parameters, params::id::shSource),
           rawParameter (parameters, params::id::shInterval),
           rawParameter (parameters, params::id::shDecay),
           rawParameter (parameters, params::id::shAmount),
           rawParameter (parameters, params::id::shTone),
-          rawParameter (parameters, params::id::shLevel),
-          rawParameter (parameters, params::id::poEnabled),
-          rawParameter (parameters, params::id::poSource),
           rawParameter (parameters, params::id::poInterval1),
           rawParameter (parameters, params::id::poLevel1),
           rawParameter (parameters, params::id::poInterval2),
           rawParameter (parameters, params::id::poLevel2),
           rawParameter (parameters, params::id::poFormant),
           rawParameter (parameters, params::id::poWidth),
-          rawParameter (parameters, params::id::frEnabled),
-          rawParameter (parameters, params::id::frSource),
           rawParameter (parameters, params::id::frHold),
           rawParameter (parameters, params::id::frAttack),
           rawParameter (parameters, params::id::frRelease),
           rawParameter (parameters, params::id::frTone),
-          rawParameter (parameters, params::id::frLevel),
-          rawParameter (parameters, params::id::grEnabled),
-          rawParameter (parameters, params::id::grSource),
           rawParameter (parameters, params::id::grMode),
           rawParameter (parameters, params::id::grSize),
           rawParameter (parameters, params::id::grDensity),
@@ -163,18 +133,20 @@ SubdAmpProcessor::SubdAmpProcessor()
           rawParameter (parameters, params::id::grReverse),
           rawParameter (parameters, params::id::grDivision),
           rawParameter (parameters, params::id::grRepeats),
-          rawParameter (parameters, params::id::grLevel),
           rawParameter (parameters, params::id::tempo) },
-      bypassParameter (boolParameter (parameters, params::id::bypass)),
-      movableModules { MovableModule { subSlot, raw.subEnabled, raw.subPosition, positionOf (raw.subPosition) },
-                       MovableModule { whammySlot, raw.whEnabled, raw.whPosition, positionOf (raw.whPosition) },
-                       MovableModule { harmonizerSlot, raw.hmEnabled, raw.hmPosition, positionOf (raw.hmPosition) },
-                       MovableModule { shifterSlot, raw.fsEnabled, raw.fsPosition, positionOf (raw.fsPosition) } },
-      textureRoutes { TextureRoute { shimmerSlot, textureRaw.shSource },
-                      TextureRoute { polySlot, textureRaw.poSource },
-                      TextureRoute { freezeSlot, textureRaw.frSource },
-                      TextureRoute { granularSlot, textureRaw.grSource } }
+      bypassParameter (boolParameter (parameters, params::id::bypass))
 {
+    for (const auto& info : moduleInfos)
+    {
+        enabledValues[indexOf (info.id)] = &rawParameter (parameters, info.enabledParameter);
+        mixValues[indexOf (info.id)] = &rawParameter (parameters, info.mixParameter);
+    }
+
+    // FREEZE : la nappe s'ajoute au jeu (MIX = son niveau), qui n'est jamais atténué.
+    slotFor (ModuleId::freeze).setWetAddsToDry (true);
+
+    parameters.state.setProperty (state::chainOrderProperty, juce::String (formatChainOrder (defaultChainOrder)), nullptr);
+
     // Ramasse-miettes des captures remplacées et suivi de la latence, sur le thread de l'interface.
     startTimerHz (4);
 }
@@ -194,21 +166,19 @@ void SubdAmpProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     outputGain.prepare (spec);
     bypass.prepare (spec);
 
-    for (auto* slot : allSlots)
-        slot->prepare (spec);
-
-    for (auto& route : textureRoutes)
-        route.slot.prepare (spec);
+    for (auto& slot : slots)
+        slot.prepare (spec);
 
     dryBuffer.setSize (1, maximumExpectedSamplesPerBlock, false, true, false);
-    preAmpTap.setSize (1, maximumExpectedSamplesPerBlock, false, true, false);
-    endTap.setSize (1, maximumExpectedSamplesPerBlock, false, true, false);
     monoRight.setSize (1, maximumExpectedSamplesPerBlock, false, true, false);
     preparedBlockSize = maximumExpectedSamplesPerBlock;
     preparedSampleRate.store (sampleRate, std::memory_order_relaxed);
 
-    for (auto& module : movableModules)
-        module.activePosition = positionOf (module.position);
+    // L'ordre demandé s'applique directement, sans fondu.
+    activePackedOrder = requestedOrder.load (std::memory_order_acquire);
+    activeOrder = unpackChainOrder (activePackedOrder);
+    reorderFade.prepare (sampleRate, 0.01);
+    reorderFade.setCurrentAndTarget (1.0f);
 
     // Démarre directement sur les valeurs courantes, sans rampe depuis zéro.
     updateTargetsFromParameters();
@@ -229,11 +199,8 @@ void SubdAmpProcessor::reset()
     outputGain.reset();
     bypass.reset();
 
-    for (auto* slot : allSlots)
-        slot->reset();
-
-    for (auto& route : textureRoutes)
-        route.slot.reset();
+    for (auto& slot : slots)
+        slot.reset();
 }
 
 bool SubdAmpProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -249,8 +216,17 @@ bool SubdAmpProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 
 double SubdAmpProcessor::getTailLengthSeconds() const
 {
-    // La réinjection du FREQ SHIFT prolonge le son ; une IR de cab aussi, mais très peu.
-    return 2.0;
+    // Queue la plus longue parmi les modules allumés : le DAW continue de calculer jusque-là
+    // à l'export (réverbe du SHIMMER, relâche du FREEZE). Le FREQ SHIFT et le cab : 2 s suffisent.
+    auto seconds = 2.0;
+
+    if (isModuleEnabled (ModuleId::shimmer))
+        seconds = std::max (seconds, 1.5 * load (textureRaw.shDecay));
+
+    if (isModuleEnabled (ModuleId::freeze))
+        seconds = std::max (seconds, 0.001 * load (textureRaw.frRelease) + 1.0);
+
+    return seconds;
 }
 
 //==============================================================================
@@ -295,6 +271,7 @@ void SubdAmpProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
                                            ? std::optional<double> (*blockStartBeats + start * beatsPerSample)
                                            : std::nullopt);
 
+        updateChainOrder();
         processChunk (left + start, chunkRight, chunk);
 
         if (right == nullptr)
@@ -320,33 +297,23 @@ void SubdAmpProcessor::processChunk (float* leftSamples, float* rightSamples, in
     // Bypass complètement engagé : rien à calculer, le fondu recopie le signal sec.
     if (! bypass.isFullyBypassed())
     {
-        // Chaîne principale (mono)
         inputGain.process (left);
-        gateSlot.process (left);
-
-        for (auto& module : movableModules)
-            if (module.activePosition == params::Position::beforeAmp)
-                module.slot.process (left);
-
-        const std::span<float> preAmp { preAmpTap.getWritePointer (0), size };
-        std::copy (left.begin(), left.end(), preAmp.begin());
-
-        ampSlot.process (left);
-        cabSlot.process (left);
-
-        for (auto& module : movableModules)
-            if (module.activePosition == params::Position::afterAmp)
-                module.slot.process (left);
-
-        const std::span<float> end { endTap.getWritePointer (0), size };
-        std::copy (left.begin(), left.end(), end.begin());
         std::copy (left.begin(), left.end(), right.begin());
 
-        // Bus de textures : chacune écoute sa prise et s'ajoute en stéréo au son principal.
-        for (auto& route : textureRoutes)
+        // Chaîne en série, dans l'ordre choisi. Gauche et droite restent identiques tant
+        // qu'aucune texture ne les a séparées.
+        for (const auto module : activeOrder)
+            slotFor (module).process (left, right);
+
+        // Changement d'ordre en cours : fondu de sortie (voir updateChainOrder).
+        if (reorderFade.isSmoothing() || reorderFade.getCurrent() < 1.0f)
         {
-            const auto fromPreAmp = route.source.load (std::memory_order_relaxed) < 0.5f;
-            route.slot.process (fromPreAmp ? std::span<const float> { preAmp } : std::span<const float> { end }, left, right);
+            for (std::size_t i = 0; i < size; ++i)
+            {
+                const auto gain = reorderFade.getNext();
+                left[i] *= gain;
+                right[i] *= gain;
+            }
         }
 
         outputGain.processStereo (left, right);
@@ -355,6 +322,30 @@ void SubdAmpProcessor::processChunk (float* leftSamples, float* rightSamples, in
     bypass.processStereo (dry, left, right);
 
     publishPeak (meters.outputPeak, std::max (dsp::blockPeak (left), dsp::blockPeak (right)));
+}
+
+void SubdAmpProcessor::updateChainOrder() noexcept
+{
+    const auto requested = requestedOrder.load (std::memory_order_acquire);
+
+    if (requested == activePackedOrder)
+    {
+        reorderFade.setTarget (1.0f);
+        return;
+    }
+
+    // Nouvel ordre : la sortie descend en 10 ms, l'ordre change dans le silence, puis remonte.
+    // Rebrancher des pédales en jouant ferait un « pop » : ici, un creux de 20 ms au plus.
+    if (reorderFade.getCurrent() <= 0.0f && ! reorderFade.isSmoothing())
+    {
+        activePackedOrder = requested;
+        activeOrder = unpackChainOrder (requested);
+        reorderFade.setTarget (1.0f);
+    }
+    else
+    {
+        reorderFade.setTarget (0.0f);
+    }
 }
 
 void SubdAmpProcessor::updateTransport() noexcept
@@ -386,26 +377,40 @@ void SubdAmpProcessor::updateTargetsFromParameters() noexcept
     outputGain.setGainDecibels (load (raw.outputGain));
     bypass.setBypassed (bypassParameter.get());
 
+    // Interrupteurs et MIX. Le WHAMMY et le FREQ SHIFT mélangent eux-mêmes (fondu vers le son
+    // direct à l'unisson, réinjection) : leur emplacement reste à 100 %.
+    for (const auto& info : moduleInfos)
+    {
+        auto& slot = slotFor (info.id);
+        slot.setEnabled (isOn (*enabledValues[indexOf (info.id)]));
+
+        const auto mix = load (*mixValues[indexOf (info.id)]) * 0.01f;
+        const auto mixesInternally = info.id == ModuleId::whammy || info.id == ModuleId::freqShift;
+        slot.setMix (mixesInternally ? 1.0f : mix);
+    }
+
+    whammy.setMix (load (*mixValues[indexOf (ModuleId::whammy)]) * 0.01f);
+    shifter.setMix (load (*mixValues[indexOf (ModuleId::freqShift)]) * 0.01f);
+
     gate.setThresholdDecibels (load (raw.gateThreshold));
     gate.setReleaseMilliseconds (load (raw.gateRelease));
-    gateSlot.setEnabled (isOn (raw.gateEnabled));
 
     amp.setGainDecibels (load (raw.ampGain));
     amp.setToneGains (load (raw.ampBass), load (raw.ampMid), load (raw.ampTreble));
     amp.setLevelDecibels (load (raw.ampLevel));
-    ampSlot.setEnabled (isOn (raw.ampEnabled));
 
-    cabSlot.setEnabled (isOn (raw.cabEnabled));
+    // Capture rééchantillonnée : le sec est retardé d'autant, pour qu'un MIX partiel de
+    // l'ampli ne filtre pas en peigne.
+    slotFor (ModuleId::amp).setDryDelaySamples (amp.getModel().getLatencySamples());
 
-    sub.setLevels (load (raw.subDry) * 0.01f, load (raw.subDown1) * 0.01f,
-                   load (raw.subDown2) * 0.01f, load (raw.subUp) * 0.01f);
+    // SUB et HARMONIZER : le traité ne contient que les voix, le MIX dose le son direct.
+    sub.setLevels (0.0f, load (raw.subDown1) * 0.01f, load (raw.subDown2) * 0.01f, load (raw.subUp) * 0.01f);
     sub.setToneFrequency (load (raw.subTone));
 
     whammy.setInterval (load (raw.whInterval));
     whammy.setMode (static_cast<dsp::Whammy::Mode> (juce::roundToInt (load (raw.whMode))));
     whammy.setGlideMilliseconds (load (raw.whGlide));
     whammy.setSensitivity (load (raw.whSensitivity) * 0.01f);
-    whammy.setMix (load (raw.whMix) * 0.01f);
 
     harmonizer.setKey (juce::roundToInt (load (raw.hmKey)));
     harmonizer.setScale (static_cast<dsp::Scale> (juce::jlimit (0, dsp::numScales - 1, juce::roundToInt (load (raw.hmScale)))));
@@ -414,14 +419,15 @@ void SubdAmpProcessor::updateTargetsFromParameters() noexcept
     harmonizer.setVoiceLevel (0, load (raw.hmLevel1) * 0.01f);
     harmonizer.setVoiceLevel (1, load (raw.hmLevel2) * 0.01f);
     harmonizer.setFormantSemitones (load (raw.hmFormant));
-    harmonizer.setDirectLevel (load (raw.hmDirect) * 0.01f);
+    harmonizer.setDirectLevel (0.0f);
+
+    shifter.setShiftHz (load (raw.fsShift));
+    shifter.setFeedback (load (raw.fsFeedback) * 0.01f);
 
     shimmer.setInterval (params::shimmerIntervalSemitones (juce::roundToInt (load (textureRaw.shInterval))));
     shimmer.setDecaySeconds (load (textureRaw.shDecay));
     shimmer.setShimmer (load (textureRaw.shAmount) * 0.01f);
     shimmer.setToneHz (load (textureRaw.shTone));
-    shimmerSlot.setLevel (load (textureRaw.shLevel) * 0.01f);
-    shimmerSlot.setEnabled (isOn (textureRaw.shEnabled));
 
     poly.setInterval (0, load (textureRaw.poInterval1));
     poly.setInterval (1, load (textureRaw.poInterval2));
@@ -429,16 +435,12 @@ void SubdAmpProcessor::updateTargetsFromParameters() noexcept
     poly.setVoiceLevel (1, load (textureRaw.poLevel2) * 0.01f);
     poly.setFormantSemitones (load (textureRaw.poFormant));
     poly.setWidth (load (textureRaw.poWidth) * 0.01f);
-    polySlot.setLevel (1.0f); // niveaux réglés voix par voix
-    polySlot.setEnabled (isOn (textureRaw.poEnabled));
 
     // Arrêter le module libère aussi la nappe : elle s'éteint avec son fondu de relâche.
-    freeze.setHold (isOn (textureRaw.frHold) && isOn (textureRaw.frEnabled));
+    freeze.setHold (isOn (textureRaw.frHold) && isOn (*enabledValues[indexOf (ModuleId::freeze)]));
     freeze.setAttackMilliseconds (load (textureRaw.frAttack));
     freeze.setReleaseMilliseconds (load (textureRaw.frRelease));
     freeze.setToneHz (load (textureRaw.frTone));
-    freezeSlot.setLevel (load (textureRaw.frLevel) * 0.01f);
-    freezeSlot.setEnabled (isOn (textureRaw.frEnabled));
 
     granular.setMode (load (textureRaw.grMode) > 0.5f ? dsp::GranularCloud::Mode::stutter : dsp::GranularCloud::Mode::cloud);
     granular.setGrainMilliseconds (load (textureRaw.grSize));
@@ -448,31 +450,6 @@ void SubdAmpProcessor::updateTargetsFromParameters() noexcept
     granular.setReverseProbability (load (textureRaw.grReverse) * 0.01f);
     granular.setDivisionBeats (params::granularDivisionBeats (juce::roundToInt (load (textureRaw.grDivision))));
     granular.setRepeats (juce::roundToInt (load (textureRaw.grRepeats)));
-    granularSlot.setLevel (load (textureRaw.grLevel) * 0.01f);
-    granularSlot.setEnabled (isOn (textureRaw.grEnabled));
-
-    shifter.setShiftHz (load (raw.fsShift));
-    shifter.setMix (load (raw.fsMix) * 0.01f);
-    shifter.setFeedback (load (raw.fsFeedback) * 0.01f);
-
-    // Changement de position : le module s'éteint en fondu, change de place une fois
-    // complètement arrêté, puis se rallume en fondu à son nouvel emplacement. Pas de clic.
-    for (auto& module : movableModules)
-    {
-        const auto requested = positionOf (module.position);
-
-        if (requested != module.activePosition)
-        {
-            module.slot.setEnabled (false);
-
-            if (module.slot.isFullyOff())
-                module.activePosition = requested;
-        }
-        else
-        {
-            module.slot.setEnabled (isOn (module.enabled));
-        }
-    }
 }
 
 //==============================================================================
@@ -506,7 +483,34 @@ void SubdAmpProcessor::setStateInformation (const void* data, int sizeInBytes)
     state::addMissingParameters (loaded, defaults);
 
     parameters.replaceState (loaded);
+    restoreChainOrderFromState();
     restoreFilesFromState();
+}
+
+void SubdAmpProcessor::restoreChainOrderFromState()
+{
+    // Lecture tolérante : un ordre absent ou abîmé donne un ordre complet et valide.
+    const auto text = parameters.state.getProperty (state::chainOrderProperty).toString().toStdString();
+    setChainOrder (parseChainOrder (text));
+}
+
+//==============================================================================
+ChainOrder SubdAmpProcessor::getChainOrder() const noexcept
+{
+    return unpackChainOrder (requestedOrder.load (std::memory_order_acquire));
+}
+
+void SubdAmpProcessor::setChainOrder (const ChainOrder& newOrder)
+{
+    // Repasse par le texte : garantit un ordre complet (chaque module une fois).
+    const auto order = parseChainOrder (formatChainOrder (newOrder));
+    parameters.state.setProperty (state::chainOrderProperty, juce::String (formatChainOrder (order)), nullptr);
+    requestedOrder.store (packChainOrder (order), std::memory_order_release);
+}
+
+void SubdAmpProcessor::moveModule (ModuleId module, int newIndex)
+{
+    setChainOrder (withModuleMoved (getChainOrder(), module, static_cast<std::size_t> (std::max (0, newIndex))));
 }
 
 void SubdAmpProcessor::restoreFilesFromState()
@@ -636,13 +640,12 @@ void SubdAmpProcessor::timerCallback()
 //==============================================================================
 bool SubdAmpProcessor::isModuleEnabled (ModuleId module) const noexcept
 {
-    return isOn (*parameters.getRawParameterValue (infoFor (module).enabledParameter));
+    return isOn (*enabledValues[indexOf (module)]);
 }
 
-bool SubdAmpProcessor::isModuleAfterAmp (ModuleId module) const noexcept
+float SubdAmpProcessor::getModuleMix (ModuleId module) const noexcept
 {
-    const auto* position = infoFor (module).positionParameter;
-    return position != nullptr && positionOf (*parameters.getRawParameterValue (position)) == params::Position::afterAmp;
+    return load (*mixValues[indexOf (module)]) * 0.01f;
 }
 
 double SubdAmpProcessor::getModuleLatencyMs (ModuleId module) const noexcept
@@ -677,29 +680,33 @@ LatencyStatus SubdAmpProcessor::getLatencyStatus() const noexcept
     if (bypassParameter.get())
         return status;
 
-    for (const auto& info : moduleInfos)
+    for (const auto module : getChainOrder())
     {
-        if (! isModuleEnabled (info.id))
+        const auto& info = infoFor (module);
+        const auto mix = getModuleMix (module);
+
+        // Module arrêté, ou mélangé à moins de 1 % : il ne change rien à ce qu'on entend.
+        if (! isModuleEnabled (module) || mix < 0.01f)
             continue;
 
-        // Les textures sont en parallèle : elles ne retardent pas le son principal.
-        if (info.isTexture)
+        // Le WHAMMY fixe à l'unisson rend le son direct, sans retard.
+        if (module == ModuleId::whammy
+            && std::abs (load (raw.whInterval)) < dsp::Whammy::unisonFadeSemitones && juce::roundToInt (load (raw.whMode)) == 0)
+            continue;
+
+        const auto latency = getModuleLatencyMs (module);
+
+        // Texture mélangée : le son direct passe sans l'attendre, sa latence est à part.
+        if (info.isTexture && mix < 0.995f)
         {
             status.texturesActive = true;
-            status.textureMilliseconds = std::max (status.textureMilliseconds, getModuleLatencyMs (info.id));
+            status.textureMilliseconds = std::max (status.textureMilliseconds, latency);
             continue;
         }
 
-        // Le WHAMMY ne retarde le son que lorsqu'il transpose et qu'il est mélangé.
-        if (info.id == ModuleId::whammy
-            && (load (raw.whMix) < 1.0f
-                || (std::abs (load (raw.whInterval)) < dsp::Whammy::unisonFadeSemitones && juce::roundToInt (load (raw.whMode)) == 0)))
-            continue;
-
-        if (info.tier > status.tier)
-            status.tier = info.tier;
-
-        status.milliseconds += getModuleLatencyMs (info.id);
+        // En série : chaque module mélangé retarde ce qui suit.
+        status.tier = std::max (status.tier, info.tier);
+        status.milliseconds += latency;
     }
 
     return status;

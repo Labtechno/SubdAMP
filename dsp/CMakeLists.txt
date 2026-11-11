@@ -6,6 +6,7 @@ add_library(subdamp_dsp STATIC
     src/AmpSection.cpp
     src/Biquad.cpp
     src/BypassCrossfade.cpp
+    src/ChainSlot.cpp
     src/DelayLineShifter.cpp
     src/Fft.cpp
     src/FractionalResampler.cpp
@@ -23,8 +24,6 @@ add_library(subdamp_dsp STATIC
     src/ScaleHarmony.cpp
     src/ShimmerReverb.cpp
     src/SpectralFreeze.cpp
-    src/StereoTexture.cpp
-    src/SwitchableEffect.cpp
     src/ToneStack.cpp
     src/Whammy.cpp)
 

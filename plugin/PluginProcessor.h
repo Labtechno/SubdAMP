@@ -5,17 +5,16 @@
 #include "plugin/Parameters.h"
 #include "subdamp/dsp/AmpSection.h"
 #include "subdamp/dsp/BypassCrossfade.h"
+#include "subdamp/dsp/ChainSlot.h"
 #include "subdamp/dsp/FrequencyShifter.h"
 #include "subdamp/dsp/GainStage.h"
 #include "subdamp/dsp/Harmonizer.h"
 #include "subdamp/dsp/NoiseGate.h"
 #include "subdamp/dsp/OctaveDivider.h"
-#include "subdamp/dsp/SwitchableEffect.h"
 #include "subdamp/dsp/GranularCloud.h"
 #include "subdamp/dsp/PolyShifter.h"
 #include "subdamp/dsp/ShimmerReverb.h"
 #include "subdamp/dsp/SpectralFreeze.h"
-#include "subdamp/dsp/StereoTexture.h"
 #include "subdamp/dsp/Whammy.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -53,11 +52,12 @@ struct FileSlotStatus
 /** Latence perçue (thread de l'interface). */
 struct LatencyStatus
 {
-    // Son principal (LIVE ou JOUABLE)
+    // Son le plus direct : modules allumés et mélangés, en série. Une texture à MIX 100 % n'a
+    // plus de son direct : elle retarde tout ce qui la suit et passe ce badge en TEXTURE.
     dsp::LatencyTier tier = dsp::LatencyTier::live;
     double milliseconds = 0.0;
 
-    // Bus de textures, en parallèle
+    // Textures mélangées au son direct (MIX < 100 %) : leur retard ne gêne pas le jeu.
     bool texturesActive = false;
     double textureMilliseconds = 0.0;
 
@@ -67,10 +67,15 @@ struct LatencyStatus
 /**
     Processeur principal de SubdAmp.
 
-    Chaîne mono : entrée → gate → [slot PRE] → ampli → cab → [slot POST] → sortie, puis
-    recopie en stéréo. Les modules de pitch (SUB, WHAMMY, HARMONIZER, FREQ SHIFT) se placent
-    dans le slot PRE ou POST selon leur paramètre de position. Les entrées stéréo sont acceptées pour les DAW
-    qui n'ont que des pistes stéréo : seul le canal gauche est alors utilisé.
+    Chaîne en série, dans un ordre libre : entrée → 11 modules → sortie. Chaque module a son
+    interrupteur et son MIX (sortie = sec × (1 − MIX) + traité × MIX, voir dsp::ChainSlot).
+    Le signal est stéréo d'un bout à l'autre ; tant qu'aucune texture ne l'a ouvert, gauche et
+    droite sont identiques. Les entrées stéréo sont acceptées pour les DAW qui n'ont que des
+    pistes stéréo : seul le canal gauche (guitare) est alors utilisé.
+
+    L'ordre n'est pas un paramètre automatisable : il est enregistré dans l'état (propriété
+    « chainOrder ») et transmis au thread audio par un atomic de 64 bits. Un changement d'ordre
+    passe par un court fondu de la sortie (10 ms vers le silence, puis retour) : pas de clic.
 */
 class SubdAmpProcessor final : public juce::AudioProcessor,
                                private juce::AsyncUpdater,
@@ -129,14 +134,24 @@ public:
     juce::ChangeBroadcaster& getFileStatusBroadcaster() noexcept { return fileStatusBroadcaster; }
 
     //==============================================================================
+    // Ordre de la chaîne (thread de l'interface)
+    ChainOrder getChainOrder() const noexcept;
+    void setChainOrder (const ChainOrder& newOrder);
+
+    /** Glisser-déposer : place le module à la position donnée (0 = début de chaîne). */
+    void moveModule (ModuleId module, int newIndex);
+
+    //==============================================================================
     // État pour l'interface (thread de l'interface)
     bool isModuleEnabled (ModuleId module) const noexcept;
-    bool isModuleAfterAmp (ModuleId module) const noexcept;
+
+    /** MIX du module, de 0 à 1. */
+    float getModuleMix (ModuleId module) const noexcept;
 
     /** Retard propre à un module, en millisecondes. */
     double getModuleLatencyMs (ModuleId module) const noexcept;
 
-    /** Latence du son entendu : catégorie la plus lente parmi les modules actifs, et retard total. */
+    /** Latence du son entendu : catégorie la plus lente parmi les modules mélangés, retard cumulé. */
     LatencyStatus getLatencyStatus() const noexcept;
 
     /** Tempo utilisé par les textures (celui du DAW s'il en donne un, sinon le réglage). */
@@ -152,9 +167,11 @@ private:
     void timerCallback() override;
 
     void processChunk (float* left, float* right, int numSamples) noexcept;
+    void updateChainOrder() noexcept;
     void updateTransport() noexcept;
     void updateTargetsFromParameters() noexcept;
     void restoreFilesFromState();
+    void restoreChainOrderFromState();
     void setStatus (FileSlotStatus& slot, FileSlotStatus newStatus);
 
     juce::AudioProcessorValueTreeState parameters;
@@ -164,37 +181,23 @@ private:
     {
         std::atomic<float>& inputGain;
         std::atomic<float>& outputGain;
-        std::atomic<float>& gateEnabled;
         std::atomic<float>& gateThreshold;
         std::atomic<float>& gateRelease;
-        std::atomic<float>& ampEnabled;
         std::atomic<float>& ampGain;
         std::atomic<float>& ampBass;
         std::atomic<float>& ampMid;
         std::atomic<float>& ampTreble;
         std::atomic<float>& ampLevel;
-        std::atomic<float>& cabEnabled;
-        std::atomic<float>& subEnabled;
-        std::atomic<float>& subPosition;
-        std::atomic<float>& subDry;
         std::atomic<float>& subDown1;
         std::atomic<float>& subDown2;
         std::atomic<float>& subUp;
         std::atomic<float>& subTone;
-        std::atomic<float>& fsEnabled;
-        std::atomic<float>& fsPosition;
         std::atomic<float>& fsShift;
-        std::atomic<float>& fsMix;
         std::atomic<float>& fsFeedback;
-        std::atomic<float>& whEnabled;
-        std::atomic<float>& whPosition;
         std::atomic<float>& whInterval;
         std::atomic<float>& whMode;
         std::atomic<float>& whGlide;
         std::atomic<float>& whSensitivity;
-        std::atomic<float>& whMix;
-        std::atomic<float>& hmEnabled;
-        std::atomic<float>& hmPosition;
         std::atomic<float>& hmKey;
         std::atomic<float>& hmScale;
         std::atomic<float>& hmVoice1;
@@ -202,36 +205,25 @@ private:
         std::atomic<float>& hmVoice2;
         std::atomic<float>& hmLevel2;
         std::atomic<float>& hmFormant;
-        std::atomic<float>& hmDirect;
     };
 
     /** Paramètres des textures, mis en cache de la même façon. */
     struct TextureParameters
     {
-        std::atomic<float>& shEnabled;
-        std::atomic<float>& shSource;
         std::atomic<float>& shInterval;
         std::atomic<float>& shDecay;
         std::atomic<float>& shAmount;
         std::atomic<float>& shTone;
-        std::atomic<float>& shLevel;
-        std::atomic<float>& poEnabled;
-        std::atomic<float>& poSource;
         std::atomic<float>& poInterval1;
         std::atomic<float>& poLevel1;
         std::atomic<float>& poInterval2;
         std::atomic<float>& poLevel2;
         std::atomic<float>& poFormant;
         std::atomic<float>& poWidth;
-        std::atomic<float>& frEnabled;
-        std::atomic<float>& frSource;
         std::atomic<float>& frHold;
         std::atomic<float>& frAttack;
         std::atomic<float>& frRelease;
         std::atomic<float>& frTone;
-        std::atomic<float>& frLevel;
-        std::atomic<float>& grEnabled;
-        std::atomic<float>& grSource;
         std::atomic<float>& grMode;
         std::atomic<float>& grSize;
         std::atomic<float>& grDensity;
@@ -240,7 +232,6 @@ private:
         std::atomic<float>& grReverse;
         std::atomic<float>& grDivision;
         std::atomic<float>& grRepeats;
-        std::atomic<float>& grLevel;
         std::atomic<float>& tempo;
     };
 
@@ -248,8 +239,11 @@ private:
     TextureParameters textureRaw;
     juce::AudioParameterBool& bypassParameter;
 
+    // Interrupteur et MIX de chaque module, dans l'ordre de ModuleId.
+    std::array<std::atomic<float>*, numModules> enabledValues {}, mixValues {};
+
     //==============================================================================
-    // Chaîne audio
+    // Modules
     dsp::GainStage inputGain, outputGain;
     dsp::BypassCrossfade bypass;
 
@@ -257,47 +251,33 @@ private:
     dsp::OctaveDivider sub;
     dsp::Whammy whammy;
     dsp::Harmonizer harmonizer;
-    dsp::FrequencyShifter shifter;
     dsp::AmpSection amp;
     CabSection cab;
-
-    dsp::SwitchableEffect gateSlot { gate }, subSlot { sub }, whammySlot { whammy }, harmonizerSlot { harmonizer },
-                          shifterSlot { shifter }, ampSlot { amp }, cabSlot { cab };
-
-    std::array<dsp::SwitchableEffect*, 7> allSlots { &gateSlot, &subSlot, &whammySlot, &harmonizerSlot,
-                                                     &shifterSlot, &ampSlot, &cabSlot };
-
-    /** Module de pitch déplaçable avant ou après l'ampli. */
-    struct MovableModule
-    {
-        dsp::SwitchableEffect& slot;
-        std::atomic<float>& enabled;
-        std::atomic<float>& position;
-        params::Position activePosition;
-    };
-
-    // Ordre de traitement à l'intérieur d'un même slot : celui de movableOrder (Modules.h).
-    std::array<MovableModule, 4> movableModules;
-
-    //==============================================================================
-    // Bus de textures (parallèle, stéréo)
+    dsp::FrequencyShifter shifter;
     dsp::ShimmerReverb shimmer;
     dsp::PolyShifter poly;
     dsp::SpectralFreeze freeze;
     dsp::GranularCloud granular;
 
-    dsp::TextureSlot shimmerSlot { shimmer }, polySlot { poly }, freezeSlot { freeze }, granularSlot { granular };
-
-    /** Texture et la prise où elle écoute (avant l'ampli ou fin de chaîne). */
-    struct TextureRoute
-    {
-        dsp::TextureSlot& slot;
-        std::atomic<float>& source;
+    // Un emplacement par module, dans l'ordre de ModuleId (et non de la chaîne).
+    std::array<dsp::ChainSlot, numModules> slots {
+        dsp::ChainSlot { gate }, dsp::ChainSlot { sub }, dsp::ChainSlot { whammy }, dsp::ChainSlot { harmonizer },
+        dsp::ChainSlot { amp }, dsp::ChainSlot { cab }, dsp::ChainSlot { shifter }, dsp::ChainSlot { shimmer },
+        dsp::ChainSlot { poly }, dsp::ChainSlot { freeze }, dsp::ChainSlot { granular }
     };
 
-    std::array<TextureRoute, 4> textureRoutes;
+    dsp::ChainSlot& slotFor (ModuleId module) noexcept { return slots[indexOf (module)]; }
 
-    juce::AudioBuffer<float> preAmpTap, endTap, monoRight; // préalloués dans prepareToPlay
+    //==============================================================================
+    // Ordre de la chaîne : écrit par l'interface, lu par le thread audio (sans verrou).
+    std::atomic<std::uint64_t> requestedOrder { packChainOrder (defaultChainOrder) };
+    std::uint64_t activePackedOrder = packChainOrder (defaultChainOrder);
+    ChainOrder activeOrder = defaultChainOrder; // thread audio uniquement
+    dsp::LinearSmoother reorderFade;
+
+    static_assert (std::atomic<std::uint64_t>::is_always_lock_free);
+
+    juce::AudioBuffer<float> monoRight; // sortie droite d'une piste mono, préallouée dans prepareToPlay
 
     // Transport (thread audio) : tempo courant et position du DAW au début du bloc
     double currentTempo = 120.0;

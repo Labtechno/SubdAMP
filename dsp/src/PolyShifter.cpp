@@ -1,5 +1,7 @@
 #include "subdamp/dsp/PolyShifter.h"
 
+#include "subdamp/dsp/LinearSmoother.h"
+
 #include <signalsmith-stretch/signalsmith-stretch.h>
 
 #include <algorithm>

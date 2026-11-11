@@ -14,10 +14,13 @@ namespace subdamp::state
     structure réorganisée), en ajoutant l'étape correspondante dans migrateToCurrentVersion().
     Ajouter un paramètre ne nécessite PAS de nouvelle version : addMissingParameters() s'en charge.
 */
-inline constexpr int currentVersion = 1;
+inline constexpr int currentVersion = 2;
 
 /** Propriété portant la version, posée sur la racine de l'état. */
 inline const juce::Identifier versionProperty { "stateVersion" };
+
+/** Ordre de la chaîne en série (« gate sub amp… », voir ChainOrder.h), posé sur la racine. */
+inline const juce::Identifier chainOrderProperty { "chainOrder" };
 
 struct ParameterDefault
 {
@@ -35,6 +38,15 @@ enum class MigrationResult
 /**
     Fait évoluer un état chargé jusqu'à la version courante, sur place.
     Un état sans numéro de version est considéré comme de version 1 (première version publiée).
+
+    Version 1 → 2 (chaîne en série) :
+      - l'ordre est reconstruit depuis les anciennes positions : gate, modules placés avant
+        l'ampli, ampli, cab, modules placés après, puis les textures (autrefois en parallèle) ;
+      - les réglages DIRECT (SUB, HARMONIZER) et NIVEAU (textures) deviennent un MIX qui garde
+        le même équilibre entre son direct et effet : MIX = 1 / (1 + direct) pour le SUB et
+        l'HARMONIZER, MIX = niveau / (1 + niveau) pour SHIMMER et GRANULAR, MIX = niveau pour
+        le FREEZE (qui s'ajoute au jeu), 50 % pour le POLY (voix au niveau du direct) ;
+      - les paramètres retirés (positions, sources, DIRECT, NIVEAU) sont supprimés.
 */
 MigrationResult migrateToCurrentVersion (juce::ValueTree& state);
 

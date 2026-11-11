@@ -13,7 +13,7 @@
 #include "subdamp/dsp/ShimmerReverb.h"
 #include "subdamp/dsp/SpectralFreeze.h"
 #include "subdamp/dsp/StereoTexture.h"
-#include "subdamp/dsp/SwitchableEffect.h"
+#include "subdamp/dsp/ChainSlot.h"
 #include "subdamp/dsp/ToneStack.h"
 #include "subdamp/dsp/Whammy.h"
 
@@ -154,21 +154,30 @@ TEST_CASE ("Les textures n'allouent rien, y compris en marche / arrêt et change
     granular.setSpread (1.0f);
     granular.setReverseProbability (0.5f);
 
-    std::array<TextureSlot, 4> slots { TextureSlot { shimmer }, TextureSlot { poly }, TextureSlot { freeze }, TextureSlot { granular } };
+    // En série, comme dans le plugin : chaque texture traite la sortie stéréo de la précédente.
+    std::array<ChainSlot, 4> slots { ChainSlot { shimmer }, ChainSlot { poly }, ChainSlot { freeze }, ChainSlot { granular } };
 
     for (auto& slot : slots)
     {
         slot.prepare ({ sampleRate, blockSize });
-        slot.setLevel (1.0f);
+        slot.setMix (0.6f);
         slot.setEnabled (true);
     }
 
     auto signal = guitarLikeSignal (static_cast<int> (sampleRate) * 3);
     std::vector<float> left (blockSize), right (blockSize);
 
+    const auto runChain = [&] (std::size_t start)
+    {
+        std::copy_n (signal.data() + start, blockSize, left.begin());
+        std::copy_n (signal.data() + start, blockSize, right.begin());
+
+        for (auto& slot : slots)
+            slot.process (left, right);
+    };
+
     // Premier passage hors mesure (réveil des textures).
-    for (auto& slot : slots)
-        slot.process (std::span<const float> { signal.data(), blockSize }, left, right);
+    runChain (0);
 
     ScopedAllocationCounter counter;
 
@@ -182,28 +191,31 @@ TEST_CASE ("Les textures n'allouent rien, y compris en marche / arrêt et change
         granular.setMode ((i / 400) % 2 == 1 ? GranularCloud::Mode::stutter : GranularCloud::Mode::cloud);
         shimmer.setDecaySeconds ((i / 350) % 2 == 1 ? 12.0f : 3.0f);
         slots[3].setEnabled ((i / 500) % 3 != 2);
+        slots[0].setMix ((i / 150) % 2 == 1 ? 1.0f : 0.3f);
 
-        for (auto& slot : slots)
-            slot.process (std::span<const float> { signal.data() + start, blockSize }, left, right);
+        runChain (start);
     }
 
     REQUIRE (counter.count() == 0);
 }
 
-TEST_CASE ("Un module mis en marche puis arrêté n'alloue rien", "[realtime]")
+TEST_CASE ("Un module mis en marche puis arrêté, MIX et retard du sec qui bougent : aucune allocation", "[realtime]")
 {
     FrequencyShifter shifter;
-    SwitchableEffect slot (shifter);
+    ChainSlot slot (shifter);
     slot.prepare ({ 48000.0, blockSize });
 
     auto signal = guitarLikeSignal (48000);
+    auto right = signal;
 
     ScopedAllocationCounter counter;
 
     for (std::size_t start = 0, i = 0; start + blockSize <= signal.size(); start += blockSize, ++i)
     {
         slot.setEnabled (i % 50 < 25);
-        slot.process (std::span<float> { signal.data() + start, blockSize });
+        slot.setMix (i % 30 < 15 ? 1.0f : 0.4f);
+        slot.setDryDelaySamples (static_cast<int> (i % 7) * 10);
+        slot.process (std::span<float> { signal.data() + start, blockSize }, std::span<float> { right.data() + start, blockSize });
     }
 
     REQUIRE (counter.count() == 0);

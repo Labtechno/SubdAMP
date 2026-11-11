@@ -17,7 +17,7 @@ namespace
 
     // Mise en page, à l'échelle 1.
     constexpr int headerHeight = 64;
-    constexpr int boardHeight = 252;
+    constexpr int boardHeight = 180;
     constexpr int ioColumnWidth = 110;
     constexpr int margin = 20;
 }
@@ -95,7 +95,9 @@ SubdAmpEditor::SubdAmpEditor (SubdAmpProcessor& processorToEdit)
       lookAndFeel (std::make_unique<LookAndFeel>()),
       ampFile (processorToEdit, FileSlot::Kind::ampModel),
       cabFile (processorToEdit, FileSlot::Kind::impulseResponse),
-      pedalBoard (processorToEdit.getParameters(), [this] (ModuleId module) { selectModule (module); }),
+      pedalBoard (processorToEdit.getParameters(),
+                  [this] (ModuleId module) { selectModule (module); },
+                  [this] (ModuleId module, int newIndex) { moveModule (module, newIndex); }),
       inputAttachment (processorToEdit.getParameters(), params::id::inputGain, inputKnob),
       outputAttachment (processorToEdit.getParameters(), params::id::outputGain, outputKnob),
       bypassAttachment (processorToEdit.getParameters(), params::id::bypass, bypassButton)
@@ -130,7 +132,7 @@ SubdAmpEditor::SubdAmpEditor (SubdAmpProcessor& processorToEdit)
 
     buildCards();
 
-    shownOrder = chainOrder();
+    shownOrder = subdAmp.getChainOrder();
     pedalBoard.setOrder (shownOrder);
     shownLatency = subdAmp.getLatencyStatus();
     selectModule (subdAmp.openModule);
@@ -154,8 +156,7 @@ void SubdAmpEditor::buildCards()
     auto& parameters = subdAmp.getParameters();
 
     for (const auto& info : moduleInfos)
-        cards[static_cast<std::size_t> (info.id)] = std::make_unique<ModuleCard> (
-            parameters, utf8 (info.name), info.tier, info.enabledParameter, info.positionParameter);
+        cards[indexOf (info.id)] = std::make_unique<ModuleCard> (parameters, utf8 (info.name), info.tier, info.enabledParameter);
 
     auto& gate = cardFor (ModuleId::gate);
     gate.setDescription (utf8 ("Coupe le souffle entre les notes. Hystérésis et maintien : les fins de notes ne hachent pas."));
@@ -163,8 +164,7 @@ void SubdAmpEditor::buildCards()
     gate.addKnob (params::id::gateRelease, utf8 ("RELÂCHE"));
 
     auto& sub = cardFor (ModuleId::sub);
-    sub.setDescription (utf8 ("Octaver analogique : une et deux octaves en dessous, une au-dessus. Sans latence, sur notes isolées."));
-    sub.addKnob (params::id::subDry, "DIRECT");
+    sub.setDescription (utf8 ("Octaver analogique : une et deux octaves en dessous, une au-dessus. Sans latence, sur notes isolées. MIX 100 % : octaves seules."));
     sub.addKnob (params::id::subDown1, "-1 OCT");
     sub.addKnob (params::id::subDown2, "-2 OCT");
     sub.addKnob (params::id::subUp, "+1 OCT");
@@ -176,11 +176,10 @@ void SubdAmpEditor::buildCards()
     whammy.addChoice (params::id::whMode, "MODE", 240);
     whammy.addKnob (params::id::whGlide, "GLISSEMENT");
     whammy.addKnob (params::id::whSensitivity, utf8 ("SENSIBILITÉ"));
-    whammy.addKnob (params::id::whMix, "MIX");
     whammy.setLatencyText ([this] { return utf8 (" · ") + milliseconds (subdAmp.getModuleLatencyMs (ModuleId::whammy)); });
 
     auto& harmonizer = cardFor (ModuleId::harmonizer);
-    harmonizer.setDescription (utf8 ("Deux voix d'harmonie dans la tonalité. Le son direct reste sans latence. Notes isolées."));
+    harmonizer.setDescription (utf8 ("Deux voix d'harmonie dans la tonalité, sur notes isolées. La part sèche du MIX reste sans latence."));
     harmonizer.addChoice (params::id::hmKey, utf8 ("TONALITÉ"), 116);
     harmonizer.addChoice (params::id::hmScale, "GAMME", 196);
     harmonizer.addChoice (params::id::hmVoice1, "VOIX 1", 118);
@@ -188,7 +187,6 @@ void SubdAmpEditor::buildCards()
     harmonizer.addChoice (params::id::hmVoice2, "VOIX 2", 118);
     harmonizer.addKnob (params::id::hmLevel2, "NIVEAU 2");
     harmonizer.addKnob (params::id::hmFormant, "FORMANTS");
-    harmonizer.addKnob (params::id::hmDirect, "DIRECT");
     harmonizer.setLatencyText ([this]
     {
         // La latence suit la note jouée : on affiche la plage tant qu'aucune note n'est suivie.
@@ -215,20 +213,15 @@ void SubdAmpEditor::buildCards()
     cab.setDescription (utf8 ("Réponse impulsionnelle de baffle (.wav, .aif). Sans fichier : 4×12 simulé."));
     cab.setFooter (&cabFile, 460, 64);
 
-    // Textures : leur bouton de position choisit la prise qu'elles écoutent.
-    for (const auto module : textureOrder)
-        cardFor (module).setPositionLabels (utf8 ("SOURCE : AVANT L'AMPLI"), utf8 ("SOURCE : FIN DE CHAÎNE"), 196);
-
     auto& shimmer = cardFor (ModuleId::shimmer);
-    shimmer.setDescription (utf8 ("Réverbe dont la queue monte d'un intervalle à chaque passage : la nappe s'élève. En parallèle du son direct."));
+    shimmer.setDescription (utf8 ("Réverbe dont la queue monte d'un intervalle à chaque passage : la nappe s'élève. Stéréo."));
     shimmer.addChoice (params::id::shInterval, "INTERVALLE", 180);
     shimmer.addKnob (params::id::shDecay, utf8 ("DURÉE"));
     shimmer.addKnob (params::id::shAmount, "SHIMMER");
     shimmer.addKnob (params::id::shTone, utf8 ("TONALITÉ"));
-    shimmer.addKnob (params::id::shLevel, "NIVEAU");
 
     auto& poly = cardFor (ModuleId::poly);
-    poly.setDescription (utf8 ("Transposition polyphonique haute qualité, deux voix en stéréo. Accords bienvenus."));
+    poly.setDescription (utf8 ("Transposition polyphonique haute qualité, deux voix en stéréo. Accords bienvenus. À MIX 100 %, tout ce qui suit attend sa latence."));
     poly.addKnob (params::id::poInterval1, "INTERVALLE 1");
     poly.addKnob (params::id::poLevel1, "NIVEAU 1");
     poly.addKnob (params::id::poInterval2, "INTERVALLE 2");
@@ -238,12 +231,11 @@ void SubdAmpEditor::buildCards()
     poly.setLatencyText ([this] { return utf8 (" · ") + milliseconds (subdAmp.getModuleLatencyMs (ModuleId::poly)); });
 
     auto& freeze = cardFor (ModuleId::freeze);
-    freeze.setDescription (utf8 ("FIGER capture le son du moment et le tient en nappe infinie : rejoue par-dessus. Un second clic l'éteint en fondu."));
+    freeze.setDescription (utf8 ("FIGER capture le son du moment et le tient en nappe infinie : rejoue par-dessus. Le MIX dose la nappe, le jeu passe toujours."));
     freeze.addToggle (params::id::frHold, "FIGER", 160);
     freeze.addKnob (params::id::frAttack, "ATTAQUE");
     freeze.addKnob (params::id::frRelease, utf8 ("RELÂCHE"));
     freeze.addKnob (params::id::frTone, utf8 ("TONALITÉ"));
-    freeze.addKnob (params::id::frLevel, "NIVEAU");
 
     auto& granular = cardFor (ModuleId::granular);
     granular.setDescription (utf8 ("Grains des 8 dernières secondes : nuage dispersé, ou stutter calé sur le tempo (celui du DAW, sinon TEMPO)."));
@@ -256,13 +248,15 @@ void SubdAmpEditor::buildCards()
     granular.addChoice (params::id::grDivision, "DIVISION", 120);
     granular.addKnob (params::id::grRepeats, utf8 ("RÉPÉT."));
     granular.addKnob (params::id::tempo, "TEMPO");
-    granular.addKnob (params::id::grLevel, "NIVEAU");
 
     auto& freqShift = cardFor (ModuleId::freqShift);
     freqShift.setDescription (utf8 ("Décale toutes les fréquences du même nombre de Hz : sons métalliques, cloches, spirales."));
     freqShift.addKnob (params::id::fsShift, utf8 ("DÉCALAGE"));
-    freqShift.addKnob (params::id::fsMix, "MIX");
     freqShift.addKnob (params::id::fsFeedback, "RETOUR");
+
+    // Chaque module : son MIX, isolé à droite du panneau.
+    for (const auto& info : moduleInfos)
+        cardFor (info.id).setMixKnob (info.mixParameter);
 
     for (auto& card : cards)
         addChildComponent (*card);
@@ -270,7 +264,7 @@ void SubdAmpEditor::buildCards()
 
 ModuleCard& SubdAmpEditor::cardFor (ModuleId module)
 {
-    return *cards[static_cast<std::size_t> (module)];
+    return *cards[indexOf (module)];
 }
 
 void SubdAmpEditor::selectModule (ModuleId module)
@@ -284,23 +278,12 @@ void SubdAmpEditor::selectModule (ModuleId module)
     cardFor (module).refreshLatency();
 }
 
-std::vector<ModuleId> SubdAmpEditor::chainOrder() const
+void SubdAmpEditor::moveModule (ModuleId module, int newIndex)
 {
-    // Même ordre que le traitement : gate → [avant l'ampli] → ampli → cab → [après l'ampli].
-    std::vector<ModuleId> order { ModuleId::gate };
-
-    for (const auto module : movableOrder)
-        if (! subdAmp.isModuleAfterAmp (module))
-            order.push_back (module);
-
-    order.push_back (ModuleId::amp);
-    order.push_back (ModuleId::cab);
-
-    for (const auto module : movableOrder)
-        if (subdAmp.isModuleAfterAmp (module))
-            order.push_back (module);
-
-    return order;
+    subdAmp.moveModule (module, newIndex);
+    shownOrder = subdAmp.getChainOrder();
+    pedalBoard.setOrder (shownOrder);
+    selectModule (module); // la pédale déplacée devient celle dont on voit les réglages
 }
 
 float SubdAmpEditor::scale() const noexcept
@@ -333,7 +316,7 @@ void SubdAmpEditor::paint (juce::Graphics& g)
 
     theme::drawLatencyBadge (g, badge, shownLatency.tier, utf8 (" · ") + milliseconds (shownLatency.milliseconds), s);
 
-    // Textures actives : second badge, leur retard est à part (elles ne retardent pas le son direct).
+    // Textures mélangées : second badge, leur retard est à part (le son direct ne les attend pas).
     if (shownLatency.texturesActive)
     {
         const auto suffix = shownLatency.textureMilliseconds > 0.0 ? utf8 (" · ") + milliseconds (shownLatency.textureMilliseconds)
@@ -403,12 +386,14 @@ void SubdAmpEditor::timerCallback()
     inputMeter.pushPeak (meters.inputPeak.exchange (0.0f, std::memory_order_relaxed), elapsed);
     outputMeter.pushPeak (meters.outputPeak.exchange (0.0f, std::memory_order_relaxed), elapsed);
 
-    // Un module a changé de place (interface ou automation) : le pédalier suit l'ordre réel.
-    if (auto order = chainOrder(); order != shownOrder)
+    // L'ordre a changé ailleurs (preset, session rechargée) : le pédalier suit l'ordre réel.
+    if (const auto order = subdAmp.getChainOrder(); order != shownOrder && ! pedalBoard.isDragging())
     {
-        shownOrder = std::move (order);
+        shownOrder = order;
         pedalBoard.setOrder (shownOrder);
     }
+
+    pedalBoard.refreshMixes();
 
     // Latence affichée : mise à jour quand elle change de façon visible.
     const auto latency = subdAmp.getLatencyStatus();
