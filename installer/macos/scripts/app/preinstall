@@ -1,0 +1,8 @@
+#!/bin/bash
+# Avant d'installer l'application : retire l'ancienne version.
+. "$(dirname "$0")/user_home.sh"
+rm -rf "/Applications/SubdAmp.app"
+if [ -n "$USER_HOME" ]; then
+  rm -rf "$USER_HOME/Applications/SubdAmp.app"
+fi
+exit 0

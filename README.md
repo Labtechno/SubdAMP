@@ -126,16 +126,19 @@ Pour mesurer sur ta machine : `build/tests/SubdAmpBenchmark` (accepte tes propre
 Sur x86, le moteur NAM est compilé avec AVX2/FMA (≈ 30 % de CPU en moins). Pour un
 processeur antérieur à 2013 : `-DSUBDAMP_NAM_AVX2=OFF`.
 
-## Récupérer les binaires (sans rien compiler)
+## Installer SubdAmp (sans rien compiler)
 
-Chaque push sur `main` déclenche une compilation sur GitHub (onglet **Actions**) pour
-Windows et macOS (universel Intel + Apple Silicon). Dans le dernier run, la
-section **Artifacts** contient un zip par plateforme avec le VST3 et l'application.
+Chaque push sur `main` compile Windows et macOS (universel Intel + Apple Silicon) sur GitHub,
+fabrique les installateurs, les essaie (installation, mise à jour, désinstallation) et les
+publie dans la page **Releases** du dépôt, version **derniere-version**.
 
-### Windows
+### Windows : `SubdAmp-Windows.exe`
 
-1. Copier `SubdAmp.vst3` dans `C:\Program Files\Common Files\VST3\`.
-2. Lancer `SubdAmp.exe` pour le mode standalone (aucune installation).
+1. Lancer `SubdAmp-Windows.exe`. Windows affiche « Windows a protégé votre ordinateur »
+   (SubdAmp n'est pas signé par un éditeur payant) : **Informations complémentaires**, puis
+   **Exécuter quand même**.
+2. Suivre l'installateur. Il pose le plugin dans `C:\Program Files\Common Files\VST3\` et
+   l'application dans `C:\Program Files\SubdAmp` (raccourci dans le menu Démarrer).
 3. Au premier lancement, les réglages audio s'ouvrent : choisir le pilote **ASIO**
    (sélectionné d'office s'il existe), l'interface Focusrite et l'**entrée guitare**.
    Sur une Scarlett Solo, la guitare est sur l'entrée 2 (entrée instrument).
@@ -143,12 +146,32 @@ section **Artifacts** contient un zip par plateforme avec le VST3 et l'applicati
 
 Viser un buffer de 64 ou 128 échantillons à 48 kHz.
 
-### macOS
+**Désinstaller** : menu Démarrer > **Désinstaller SubdAmp**, ou Paramètres > Applications.
 
-1. Dézipper, puis retirer la quarantaine (binaires non signés par un compte développeur Apple) :
-   `xattr -dr com.apple.quarantine SubdAmp.app SubdAmp.vst3`
-2. Copier `SubdAmp.vst3` dans `~/Library/Audio/Plug-Ins/VST3/` et `SubdAmp.app` dans `Applications`.
-3. Au premier lancement, macOS demande l'accès au micro : c'est l'entrée de la carte son, il faut accepter.
+### macOS : `SubdAmp.dmg`
+
+1. Ouvrir `SubdAmp.dmg` : il contient **Installer SubdAmp** et **Désinstaller SubdAmp**.
+2. Double-cliquer sur **Installer SubdAmp**. macOS refuse la première fois (non signé par
+   Apple) : **OK**, puis **Réglages Système > Confidentialité et sécurité** > **Ouvrir quand
+   même** en face du message sur Installer SubdAmp, et confirmer.
+3. Suivre l'installateur (mot de passe de session). Il pose le plugin dans
+   `/Library/Audio/Plug-Ins/VST3` et l'application dans `Applications`.
+4. Au premier lancement, macOS demande l'accès au micro : c'est l'entrée de la carte son, il faut accepter.
+
+**Désinstaller** : double-cliquer sur **Désinstaller SubdAmp** (même premier passage par
+« Ouvrir quand même »).
+
+### Mise à jour et désinstallation
+
+Lancer l'installateur d'une version plus récente suffit : l'ancienne version est d'abord
+retirée en entier (y compris un plugin copié à la main auparavant), puis remplacée. La
+désinstallation retire le plugin, l'application et ses réglages (carte son, dernier son joué) ;
+les captures NAM, les IR et les projets ne sont jamais touchés.
+
+Les installateurs sont fabriqués avec Inno Setup (Windows, licence libre sans obligation sur
+l'installateur produit) et les outils d'Apple `pkgbuild` / `productbuild` (macOS). Les sources
+sont dans `installer/`. Les zips bruts (VST3 + application, sans installateur) restent dans la
+section **Artifacts** de chaque compilation (onglet **Actions**).
 
 ## Compiler soi-même
 

@@ -1,6 +1,8 @@
 name: Build
 
-# Chaque push compile Windows et macOS (dépôt public : minutes gratuites).
+# Chaque push compile Windows et macOS (dépôt public : minutes gratuites), fabrique les
+# installateurs et les essaie (installation, mise à jour, désinstallation). Sur main, ils sont
+# publiés dans la page « Releases » du dépôt (version « derniere-version »).
 # Pas de version Linux : inutile pour l'usage prévu (le développement local, lui, reste testé sous Linux).
 on:
   push:
@@ -11,6 +13,9 @@ on:
   workflow_dispatch:
 
 # Un nouveau push annule la compilation en cours du précédent : pas de minutes gaspillées.
+permissions:
+  contents: write   # pour publier les installateurs dans « Releases »
+
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
@@ -79,6 +84,85 @@ jobs:
           "$PLUGINVAL" --strictness-level 10 --timeout-ms 300000 \
             --validate "build/SubdAmp_artefacts/Release/VST3/SubdAmp.vst3"
 
+      - name: Installateur Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(SubdAmp VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          & $iscc /Qp "/DAppVersion=$version" "/DArtefacts=$PWD\build\SubdAmp_artefacts\Release" "/DRepo=$PWD" "/O$PWD\dist-installer" installer\windows\SubdAmp.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Essai de l'installateur (installation, mise à jour, désinstallation)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path "dist-installer\Installer SubdAmp.exe").Path
+          $silent = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          function Run-Setup ($exe) {
+            $p = Start-Process -FilePath $exe -ArgumentList $silent -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "$exe : code $($p.ExitCode)" }
+          }
+          $vst3 = "$env:CommonProgramFiles\VST3\SubdAmp.vst3"
+          $app = "$env:ProgramFiles\SubdAmp"
+
+          Run-Setup $setup
+          if (-not (Test-Path "$vst3\Contents\x86_64-win\SubdAmp.vst3")) { throw "VST3 absent" }
+          if (-not (Test-Path "$app\SubdAmp.exe")) { throw "application absente" }
+          if (-not (Test-Path "$app\licences\OFL-ChakraPetch.txt")) { throw "licences absentes" }
+
+          # Mise à jour : un vieux fichier dans l'ancien plugin doit disparaître.
+          New-Item -ItemType File "$vst3\Contents\vieux-fichier" | Out-Null
+          Run-Setup $setup
+          if (Test-Path "$vst3\Contents\vieux-fichier") { throw "mise à jour : ancien fichier resté" }
+
+          # Désinstallation : plugin, application et réglages partent.
+          New-Item -ItemType Directory -Force "$env:APPDATA\SubdAmp" | Out-Null
+          Set-Content "$env:APPDATA\SubdAmp\SubdAmp.settings" "essai"
+          Run-Setup "$app\unins000.exe"
+          for ($i = 0; $i -lt 60 -and (Test-Path "$app\SubdAmp.exe"); $i++) { Start-Sleep 1 }
+          if (Test-Path "$app\SubdAmp.exe") { throw "application restée" }
+          if (Test-Path $vst3) { throw "VST3 resté" }
+          if (Test-Path "$env:APPDATA\SubdAmp") { throw "réglages restés" }
+          Write-Host "Installation, mise à jour et désinstallation : OK"
+
+      - name: Installateur macOS
+        if: runner.os == 'macOS'
+        run: bash installer/macos/build_pkg.sh build/SubdAmp_artefacts/Release dist-installer
+
+      - name: Essai de l'installateur (installation, mise à jour, désinstallation)
+        if: runner.os == 'macOS'
+        run: |
+          set -x
+          sudo installer -pkg "dist-installer/Installer SubdAmp.pkg" -target /
+          test -d /Library/Audio/Plug-Ins/VST3/SubdAmp.vst3
+          test -d /Applications/SubdAmp.app
+          ls /Applications/SubdAmp.app/Contents/Resources/licences/OFL-*.txt
+          codesign --verify --deep --verbose=2 /Library/Audio/Plug-Ins/VST3/SubdAmp.vst3
+          codesign --verify --deep --verbose=2 /Applications/SubdAmp.app
+          lipo -info /Library/Audio/Plug-Ins/VST3/SubdAmp.vst3/Contents/MacOS/SubdAmp
+          # Mise à jour : un vieux fichier dans l'ancien plugin doit disparaître.
+          sudo touch /Library/Audio/Plug-Ins/VST3/SubdAmp.vst3/Contents/vieux-fichier
+          sudo installer -pkg "dist-installer/Installer SubdAmp.pkg" -target /
+          test ! -e /Library/Audio/Plug-Ins/VST3/SubdAmp.vst3/Contents/vieux-fichier
+          test -d /Library/Audio/Plug-Ins/VST3/SubdAmp.vst3
+          # Désinstallation : tout part.
+          sudo installer -pkg "dist-installer/Désinstaller SubdAmp.pkg" -target /
+          test ! -e /Library/Audio/Plug-Ins/VST3/SubdAmp.vst3
+          test ! -e /Applications/SubdAmp.app
+          if pkgutil --pkgs | grep -qE "com.labtechno.subdamp.(vst3|app)$"; then exit 1; fi
+          hdiutil imageinfo dist-installer/SubdAmp.dmg | head -5
+
+      - name: Publier l'installateur
+        uses: actions/upload-artifact@v7
+        with:
+          name: SubdAmp-Installateur-${{ runner.os }}
+          path: |
+            dist-installer/SubdAmp.dmg
+            dist-installer/Installer SubdAmp.exe
+          if-no-files-found: error
+
       - name: Préparer l'archive
         shell: bash
         run: |
@@ -105,3 +189,53 @@ jobs:
         with:
           name: SubdAmp-${{ runner.os }}
           path: SubdAmp-${{ runner.os }}.zip
+
+  # Publication des deux installateurs dans « Releases » (push sur main seulement).
+  release:
+    name: Publication dans Releases
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+
+      - name: Récupérer les installateurs
+        uses: actions/download-artifact@v7
+        with:
+          pattern: SubdAmp-Installateur-*
+          path: installateurs
+          merge-multiple: true
+
+      - name: Publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(sed -n 's/^project(SubdAmp VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          mv "installateurs/Installer SubdAmp.exe" installateurs/SubdAmp-Windows.exe
+          cat > notes.md <<EOF
+          Version $VERSION, compilée le $(date -u '+%d/%m/%Y') depuis main (${GITHUB_SHA::7}).
+
+          ## Windows : SubdAmp-Windows.exe
+
+          1. Télécharge **SubdAmp-Windows.exe** ci-dessous et lance-le.
+          2. Windows affiche « Windows a protégé votre ordinateur » (SubdAmp n'est pas signé par un éditeur payant) : clique sur **Informations complémentaires**, puis **Exécuter quand même**.
+          3. Suis l'installateur : plugin VST3 et application cochés par défaut.
+          4. L'application est dans le menu Démarrer ; le plugin dans \`C:\\Program Files\\Common Files\\VST3\`.
+
+          **Désinstaller** : menu Démarrer > **Désinstaller SubdAmp**, ou Paramètres > Applications.
+
+          ## Mac : SubdAmp.dmg
+
+          1. Télécharge **SubdAmp.dmg** et ouvre-le : il contient **Installer SubdAmp** et **Désinstaller SubdAmp**.
+          2. Double-clique sur **Installer SubdAmp**. macOS refuse la première fois (non signé par Apple) : clique sur **OK**.
+          3. Ouvre **Réglages Système > Confidentialité et sécurité**, descends jusqu'au message sur Installer SubdAmp et clique sur **Ouvrir quand même**, puis confirme.
+          4. Suis l'installateur : Continuer, Installer, ton mot de passe de session.
+
+          **Désinstaller** : double-clique sur **Désinstaller SubdAmp** (même premier passage par « Ouvrir quand même »).
+
+          **Mise à jour**, sur les deux systèmes : lance l'installateur de la nouvelle version, il remplace l'ancienne. Tes réglages, captures NAM et IR sont gardés.
+          EOF
+          gh release delete derniere-version --yes --cleanup-tag 2>/dev/null || true
+          gh release create derniere-version installateurs/SubdAmp-Windows.exe installateurs/SubdAmp.dmg \
+            --target "$GITHUB_SHA" --title "SubdAmp $VERSION" --notes-file notes.md --latest

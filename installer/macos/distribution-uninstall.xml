@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Désinstaller SubdAmp</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="never" require-scripts="true" hostArchitectures="arm64,x86_64"/>
+    <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/>
+    <choices-outline>
+        <line choice="uninstall"/>
+    </choices-outline>
+    <choice id="uninstall" title="Désinstaller SubdAmp">
+        <pkg-ref id="com.labtechno.subdamp.uninstall"/>
+    </choice>
+    <pkg-ref id="com.labtechno.subdamp.uninstall" version="@VERSION@">uninstall.pkg</pkg-ref>
+</installer-gui-script>

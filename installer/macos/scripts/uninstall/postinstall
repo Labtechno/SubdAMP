@@ -1,0 +1,13 @@
+#!/bin/bash
+# Désinstallation de SubdAmp. Les captures NAM, IR et projets ne sont pas touchés.
+. "$(dirname "$0")/user_home.sh"
+rm -rf "/Library/Audio/Plug-Ins/VST3/SubdAmp.vst3" "/Applications/SubdAmp.app"
+if [ -n "$USER_HOME" ]; then
+  rm -rf "$USER_HOME/Applications/SubdAmp.app" \
+         "$USER_HOME/Library/Audio/Plug-Ins/VST3/SubdAmp.vst3" \
+         "$USER_HOME/Library/Application Support/SubdAmp.settings"
+fi
+for id in com.labtechno.subdamp.vst3 com.labtechno.subdamp.app; do
+  pkgutil --forget "$id" >/dev/null 2>&1 || true
+done
+exit 0

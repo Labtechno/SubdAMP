@@ -1,0 +1,10 @@
+#!/bin/bash
+# Avant d'installer le plugin : retire complètement l'ancienne version (aucun vieux fichier
+# ne reste dans le bundle), y compris une copie manuelle dans le dossier personnel, qui
+# ferait apparaître SubdAmp deux fois dans le logiciel audio.
+. "$(dirname "$0")/user_home.sh"
+rm -rf "/Library/Audio/Plug-Ins/VST3/SubdAmp.vst3"
+if [ -n "$USER_HOME" ]; then
+  rm -rf "$USER_HOME/Library/Audio/Plug-Ins/VST3/SubdAmp.vst3"
+fi
+exit 0
